@@ -438,6 +438,24 @@ fn app_shell_proposals_organ_flags_creep_pruner_and_mcp_navigation() {
     assert!(pb_txt.contains("Pareto frontier"));
 }
 
+/// No embedded double quotes: Windows `Command` quoting then stays a single
+/// quoted argv element, which CPython's parser accepts unchanged.
+const JSON_OK_PROBE: &str = "import json,sys; sys.stdout.buffer.write(b'boot_log\\r\\n'); sys.stdout.buffer.write(json.dumps({'objective': 2.635983, 'validity': 1.0}).encode()); sys.stdout.buffer.write(b'\\r\\n')";
+
+const JSON_BAD_PROBE: &str = "import json,sys; sys.stdout.buffer.write(json.dumps({'objective': 2.635983, 'validity': 0.0}).encode()); sys.stdout.buffer.write(b'\\r\\n')";
+
+fn json_probe_interpreter() -> &'static str {
+    for candidate in ["python", "python3"] {
+        let mut cmd = std::process::Command::new(candidate);
+        cmd.arg("--version");
+        let out = carnot::proc_util::run_command_bounded(cmd, None, 5_000, 16_384);
+        if out.spawned && out.success && !out.timed_out {
+            return candidate;
+        }
+    }
+    panic!("python interpreter not found; put python or python3 on PATH");
+}
+
 #[test]
 fn scoped_evolve_blocks_island_ring_and_subprocess_json_verifier() {
     let src = "fn frozen_wrapper() {\n    // EVOLVE_START\n    let x = 1;\n    // EVOLVE_END\n    assert!(true);\n}\n";
@@ -454,40 +472,34 @@ fn scoped_evolve_blocks_island_ring_and_subprocess_json_verifier() {
     assert!(spliced.ends_with("\n    // EVOLVE_END\n    assert!(true);\n}\n"));
     assert!(spliced.contains("let x = 42;"));
 
-    // Independent subprocess last-line JSON evaluator
-    // Python, not PowerShell: Windows command-line quoting breaks a `-Command`
-    // string that itself contains JSON double quotes.
-    #[cfg(target_os = "windows")]
-    let (prog, ok_args, bad_args): (&str, &[&str], &[&str]) = (
-        "python",
-        &[
-            "-c",
-            "import json; print('boot_log'); print(json.dumps({'objective': 2.635983, 'validity': 1.0}))",
-        ],
-        &[
-            "-c",
-            "import json; print(json.dumps({'objective': 2.635983, 'validity': 0.0}))",
-        ],
-    );
-    #[cfg(not(target_os = "windows"))]
-    let (prog, ok_args, bad_args): (&str, &[&str], &[&str]) = (
-        "sh",
-        &[
-            "-c",
-            "printf 'boot_log\\n{\"objective\": 2.635983, \"validity\": 1.0}\\n'",
-        ],
-        &[
-            "-c",
-            "printf '{\"objective\": 2.635983, \"validity\": 0.0}\\n'",
-        ],
-    );
-
-    let ok_eval = evaluate_json_command_with_timeout(prog, ok_args, 2_000);
-    assert!(ok_eval.success);
+    // Independent subprocess last-line JSON evaluator.
+    //
+    // The old Windows probe was `powershell.exe -Command` with a 2s budget.
+    // On windows-latest that call returned success=false after about 2s, which
+    // is the wall-clock kill, and that host is a poor JSON probe anyway: it
+    // re-parses the raw command line and writes UTF-16 when stdout is a pipe.
+    // Gym benches already run under Python (argv + UTF-8) on both CI images.
+    // The script writes CRLF bytes itself so the line ending does not depend
+    // on the interpreter text mode. No per-platform skip: the same probe runs
+    // everywhere Python is on PATH.
+    let python = json_probe_interpreter();
+    let ok_eval = evaluate_json_command_with_timeout(python, &["-c", JSON_OK_PROBE], 10_000);
+    assert!(ok_eval.success, "last-line JSON probe failed: {ok_eval:?}");
     assert!((ok_eval.raw_objective - 2.635983).abs() < 1e-6);
 
-    let rejected_eval = evaluate_json_command_with_timeout(prog, bad_args, 2_000);
-    assert!(!rejected_eval.success);
+    let rejected_eval = evaluate_json_command_with_timeout(python, &["-c", JSON_BAD_PROBE], 10_000);
+    assert!(
+        !rejected_eval.success,
+        "validity <= 0 must be rejected: {rejected_eval:?}"
+    );
+    assert!(
+        rejected_eval
+            .error_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("validity"),
+        "expected a validity rejection, got {rejected_eval:?}"
+    );
 
     // Pro tier gate + 3-island ring evolution + SHA-256 Experience Cards
     let mut machine = CarnotMachine::new_seeded();

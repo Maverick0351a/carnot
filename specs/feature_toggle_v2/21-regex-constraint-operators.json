@@ -1,0 +1,634 @@
+{
+    "name": "21-regex-constraint-operators",
+    "state": {
+        "version": 1,
+        "features": [
+            {
+                "name": "regex.case.sensitive",
+                "description": "Regex constraints are case sensitive by default",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^cat$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "invalid-regex-defaults-to-false",
+                "description": "Invalid regex always results in toggle being disabled",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "(regex"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R01.literal_and_anchors",
+                "description": "Anchors ^ $ basic email-ish check",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^[^@]+@[^@]+$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R01.literal_and_anchors.referencing.property",
+                "description": "Anchors ^ $ basic email-ish check",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "nested",
+                                "operator": "REGEX",
+                                "value": "^[^@]+@[^@]+$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R02.perl_digit_class",
+                "description": "\\d and quantifiers",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^user\\d{3}$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R03.ascii_class",
+                "description": "[[:alpha:]] and +",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^[[:alpha:]]+$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R04.word_boundary_ascii",
+                "description": "\\b word boundary (ASCII semantics)",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "\\bcat\\b"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R05.alternation_prefer_left",
+                "description": "Alternation prefers left branch",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(foo|fo)$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R06.grouping_and_optional",
+                "description": "Capturing group + optional ?",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(ab)?c$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R07.repetition_range_limits",
+                "description": "Bounded repetition {n,m}",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^a{2,4}$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R08.greedy_vs_nongreedy",
+                "description": "Non-greedy quantifier *?",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^a.*?b$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R09.inline_flag_i",
+                "description": "Inline (?i) case-insensitive",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(?i)abc$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "Global.case.insensitive",
+                "description": "Global case-insensitive flag (should work the same as inline (?i))",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^abc$",
+                                "caseInsensitive": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "Inverted.constraint",
+                "description": "Inverted regex constraint (should enable when regex does NOT match)",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^abc$",
+                                "inverted": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R10.inline_flag_m",
+                "description": "Inline (?m) multiline anchors",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "(?m)^foo$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R11.inline_flag_s_dotall",
+                "description": "Inline (?s) dot matches newline",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(?s)a.b$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R90.reject_lookahead",
+                "description": "Should be rejected by server validation (lookahead not supported in RE2)",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(?=a)b$"
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "R91.reject_backreference",
+                "description": "Should be rejected by server validation (backrefs not supported in RE2)",
+                "enabled": true,
+                "strategies": [
+                    {
+                        "name": "default",
+                        "parameters": {},
+                        "constraints": [
+                            {
+                                "contextName": "userId",
+                                "operator": "REGEX",
+                                "value": "^(a)\\1$"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "tests": [
+        {
+            "description": "Basic email match should be enabled when regex matches",
+            "context": {
+                "userId": "test@example.com"
+            },
+            "toggleName": "R01.literal_and_anchors",
+            "expectedResult": true
+        },
+        {
+            "description": "Broken regex should not match anything",
+            "context": {
+                "userId": "not-an-email"
+            },
+            "toggleName": "R01.literal_and_anchors",
+            "expectedResult": false
+        },
+        {
+            "description": "Invalid regex should result in toggle being disabled",
+            "context": {
+                "userId": "any-value"
+            },
+            "toggleName": "invalid-regex-defaults-to-false",
+            "expectedResult": false
+        },
+        {
+            "description": "Null value should result in toggle being disabled",
+            "context": {
+                "properties": {
+                    "nested": null
+                }
+            },
+            "toggleName": "R01.literal_and_anchors.referencing.property",
+            "expectedResult": false
+        },
+        {
+            "description": "Sanity check for 'Null value should result in toggle being disabled'",
+            "context": {
+                "properties": {
+                    "nested": "test@example.com"
+                }
+            },
+            "toggleName": "R01.literal_and_anchors.referencing.property",
+            "expectedResult": true
+        },
+        {
+            "description": "Undefined value should result in toggle being disabled",
+            "context": {},
+            "toggleName": "R01.literal_and_anchors",
+            "expectedResult": false
+        },
+        {
+            "description": "R01 matches basic email-ish",
+            "context": {
+                "userId": "test@example.com"
+            },
+            "toggleName": "R01.literal_and_anchors",
+            "expectedResult": true
+        },
+        {
+            "description": "R01 rejects missing @",
+            "context": {
+                "userId": "not-an-email"
+            },
+            "toggleName": "R01.literal_and_anchors",
+            "expectedResult": false
+        },
+        {
+            "description": "R02 matches user + 3 digits",
+            "context": {
+                "userId": "user123"
+            },
+            "toggleName": "R02.perl_digit_class",
+            "expectedResult": true
+        },
+        {
+            "description": "R02 rejects wrong digit count",
+            "context": {
+                "userId": "user12"
+            },
+            "toggleName": "R02.perl_digit_class",
+            "expectedResult": false
+        },
+        {
+            "description": "R03 matches ASCII alpha only",
+            "context": {
+                "userId": "AlphaBeta"
+            },
+            "toggleName": "R03.ascii_class",
+            "expectedResult": true
+        },
+        {
+            "description": "R03 rejects digits",
+            "context": {
+                "userId": "Alpha1"
+            },
+            "toggleName": "R03.ascii_class",
+            "expectedResult": false
+        },
+        {
+            "description": "R04 matches whole word cat",
+            "context": {
+                "userId": "a cat b"
+            },
+            "toggleName": "R04.word_boundary_ascii",
+            "expectedResult": true
+        },
+        {
+            "description": "R04 does not match inside 'concatenate'",
+            "context": {
+                "userId": "concatenate"
+            },
+            "toggleName": "R04.word_boundary_ascii",
+            "expectedResult": false
+        },
+        {
+            "description": "R05 matches foo",
+            "context": {
+                "userId": "foo"
+            },
+            "toggleName": "R05.alternation_prefer_left",
+            "expectedResult": true
+        },
+        {
+            "description": "R05 matches fo",
+            "context": {
+                "userId": "fo"
+            },
+            "toggleName": "R05.alternation_prefer_left",
+            "expectedResult": true
+        },
+        {
+            "description": "R05 rejects f",
+            "context": {
+                "userId": "f"
+            },
+            "toggleName": "R05.alternation_prefer_left",
+            "expectedResult": false
+        },
+        {
+            "description": "R06 matches abc (optional 'ab')",
+            "context": {
+                "userId": "abc"
+            },
+            "toggleName": "R06.grouping_and_optional",
+            "expectedResult": true
+        },
+        {
+            "description": "R06 matches c",
+            "context": {
+                "userId": "c"
+            },
+            "toggleName": "R06.grouping_and_optional",
+            "expectedResult": true
+        },
+        {
+            "description": "R06 rejects ac (missing b)",
+            "context": {
+                "userId": "ac"
+            },
+            "toggleName": "R06.grouping_and_optional",
+            "expectedResult": false
+        },
+        {
+            "description": "R07 matches aaaa (4 a's)",
+            "context": {
+                "userId": "aaaa"
+            },
+            "toggleName": "R07.repetition_range_limits",
+            "expectedResult": true
+        },
+        {
+            "description": "R07 rejects a (too short)",
+            "context": {
+                "userId": "a"
+            },
+            "toggleName": "R07.repetition_range_limits",
+            "expectedResult": false
+        },
+        {
+            "description": "R07 rejects aaaaa (too long)",
+            "context": {
+                "userId": "aaaaa"
+            },
+            "toggleName": "R07.repetition_range_limits",
+            "expectedResult": false
+        },
+        {
+            "description": "R08 non-greedy still matches full string ending in b",
+            "context": {
+                "userId": "a___b___b"
+            },
+            "toggleName": "R08.greedy_vs_nongreedy",
+            "expectedResult": true
+        },
+        {
+            "description": "R08 rejects missing ending b",
+            "context": {
+                "userId": "a___b___c"
+            },
+            "toggleName": "R08.greedy_vs_nongreedy",
+            "expectedResult": false
+        },
+        {
+            "description": "R09 (?i) matches different case",
+            "context": {
+                "userId": "AbC"
+            },
+            "toggleName": "R09.inline_flag_i",
+            "expectedResult": true
+        },
+        {
+            "description": "R09 (?i) rejects extra chars",
+            "context": {
+                "userId": "zAbCz"
+            },
+            "toggleName": "R09.inline_flag_i",
+            "expectedResult": false
+        },
+        {
+            "description": "Global case-insensitive matches different case",
+            "context": {
+                "userId": "AbC"
+            },
+            "toggleName": "Global.case.insensitive",
+            "expectedResult": true
+        },
+        {
+            "description": "Regex constraint is case sensitive by default",
+            "context": {
+                "userId": "Cat"
+            },
+            "toggleName": "regex.case.sensitive",
+            "expectedResult": false
+        },
+        {
+            "description": "Regex constraint is case sensitive by default (validate)",
+            "context": {
+                "userId": "cat"
+            },
+            "toggleName": "regex.case.sensitive",
+            "expectedResult": true
+        },
+        {
+            "description": "Inverted constraint should enable when regex does not match",
+            "context": {
+                "userId": "xyz"
+            },
+            "toggleName": "Inverted.constraint",
+            "expectedResult": true
+        },
+        {
+            "description": "Inverted constraint should disable when regex matches",
+            "context": {
+                "userId": "abc"
+            },
+            "toggleName": "Inverted.constraint",
+            "expectedResult": false
+        },
+        {
+            "description": "R10 (?m) matches line 'foo' inside multiline string",
+            "context": {
+                "userId": "x\nfoo\ny"
+            },
+            "toggleName": "R10.inline_flag_m",
+            "expectedResult": true
+        },
+        {
+            "description": "R10 without foo line would fail",
+            "context": {
+                "userId": "x\nfo\ny"
+            },
+            "toggleName": "R10.inline_flag_m",
+            "expectedResult": false
+        },
+        {
+            "description": "R11 (?s) dot matches newline",
+            "context": {
+                "userId": "a\nb"
+            },
+            "toggleName": "R11.inline_flag_s_dotall",
+            "expectedResult": true
+        },
+        {
+            "description": "R90 lookahead should be rejected upstream; if it leaks through, it must not enable",
+            "context": {
+                "userId": "ab"
+            },
+            "toggleName": "R90.reject_lookahead",
+            "expectedResult": false
+        },
+        {
+            "description": "R91 backreference should be rejected upstream; if it leaks through, it must not enable",
+            "context": {
+                "userId": "aa"
+            },
+            "toggleName": "R91.reject_backreference",
+            "expectedResult": false
+        }
+    ]
+}

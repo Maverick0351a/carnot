@@ -1,0 +1,10 @@
+/target/
+*.pdb
+*.log
+.DS_Store
+Thumbs.db
+__pycache__/
+
+# Local clean-room state: lineage notes and the studied-name denylist.
+# Never commit this directory.
+.carnot/

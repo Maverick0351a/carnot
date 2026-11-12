@@ -1,0 +1,1952 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Carnot — App Maker, Clean-Room Refinery &amp; Cutover Workbench</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+
+      --light-bg: #f5f7fa;
+      --dark-bg: #0f141b;
+      --light-rail: #edf1f6;
+      --dark-rail: #131a23;
+      --light-surface: #ffffff;
+      --dark-surface: #171f2a;
+      --light-surface-raised: #e8eef5;
+      --dark-surface-raised: #1f2937;
+      --light-border: #cfd7e2;
+      --dark-border: #2a3647;
+      --light-text: #161d26;
+      --dark-text: #e6edf5;
+      --light-muted: #556171;
+      --dark-muted: #8c9aab;
+
+      --light-cobalt: #1b56b5;
+      --dark-cobalt: #4d93eb;
+      --light-amber: #9c6208;
+      --dark-amber: #e3a23b;
+      --light-crimson: #b4251b;
+      --dark-crimson: #e4564b;
+      --light-emerald: #177833;
+      --dark-emerald: #3fb950;
+
+      --bg: var(--light-bg);
+      --rail: var(--light-rail);
+      --surface: var(--light-surface);
+      --surface-raised: var(--light-surface-raised);
+      --border: var(--light-border);
+      --text: var(--light-text);
+      --muted: var(--light-muted);
+      --accent-cobalt: var(--light-cobalt);
+      --accent-amber: var(--light-amber);
+      --accent-crimson: var(--light-crimson);
+      --accent-emerald: var(--light-emerald);
+
+      --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+
+      accent-color: var(--accent-cobalt);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: var(--dark-bg);
+        --rail: var(--dark-rail);
+        --surface: var(--dark-surface);
+        --surface-raised: var(--dark-surface-raised);
+        --border: var(--dark-border);
+        --text: var(--dark-text);
+        --muted: var(--dark-muted);
+        --accent-cobalt: var(--dark-cobalt);
+        --accent-amber: var(--dark-amber);
+        --accent-crimson: var(--dark-crimson);
+        --accent-emerald: var(--dark-emerald);
+      }
+    }
+
+    @supports (color: light-dark(white, black)) {
+      :root {
+        --bg: light-dark(var(--light-bg), var(--dark-bg));
+        --rail: light-dark(var(--light-rail), var(--dark-rail));
+        --surface: light-dark(var(--light-surface), var(--dark-surface));
+        --surface-raised: light-dark(var(--light-surface-raised), var(--dark-surface-raised));
+        --border: light-dark(var(--light-border), var(--dark-border));
+        --text: light-dark(var(--light-text), var(--dark-text));
+        --muted: light-dark(var(--light-muted), var(--dark-muted));
+        --accent-cobalt: light-dark(var(--light-cobalt), var(--dark-cobalt));
+        --accent-amber: light-dark(var(--light-amber), var(--dark-amber));
+        --accent-crimson: light-dark(var(--light-crimson), var(--dark-crimson));
+        --accent-emerald: light-dark(var(--light-emerald), var(--dark-emerald));
+      }
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: var(--light-bg);
+      --rail: var(--light-rail);
+      --surface: var(--light-surface);
+      --surface-raised: var(--light-surface-raised);
+      --border: var(--light-border);
+      --text: var(--light-text);
+      --muted: var(--light-muted);
+      --accent-cobalt: var(--light-cobalt);
+      --accent-amber: var(--light-amber);
+      --accent-crimson: var(--light-crimson);
+      --accent-emerald: var(--light-emerald);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: var(--dark-bg);
+      --rail: var(--dark-rail);
+      --surface: var(--dark-surface);
+      --surface-raised: var(--dark-surface-raised);
+      --border: var(--dark-border);
+      --text: var(--dark-text);
+      --muted: var(--dark-muted);
+      --accent-cobalt: var(--dark-cobalt);
+      --accent-amber: var(--dark-amber);
+      --accent-crimson: var(--dark-crimson);
+      --accent-emerald: var(--dark-emerald);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.45;
+      font-size: 0.875rem;
+    }
+
+    button, select, input, textarea { font: inherit; color: inherit; }
+
+    .mono, .num {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Outer Persistent Desktop Shell */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 224px minmax(0, 1fr) 368px;
+      min-height: 100vh;
+    }
+
+    @media (max-width: 1180px) {
+      .app-shell {
+        grid-template-columns: 196px minmax(0, 1fr);
+      }
+      .agent-column {
+        grid-column: 1 / -1;
+        border-inline-start: none;
+        border-block-start: 1px solid var(--border);
+      }
+    }
+
+    @media (max-width: 780px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+      .nav-rail {
+        border-inline-end: none;
+        border-block-end: 1px solid var(--border);
+      }
+    }
+
+    /* Left Navigation & Playbook Rail */
+    .nav-rail {
+      background: var(--rail);
+      border-inline-end: 1px solid var(--border);
+      padding: 1rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.1rem;
+    }
+
+    .brand-mark {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0 0.35rem 0.75rem;
+      border-block-end: 1px solid var(--border);
+    }
+
+    .brand-name {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-sub {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .rail-section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      padding: 0 0.35rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .rail-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .rail-btn {
+      width: 100%;
+      text-align: left;
+      padding: 0.48rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.45rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
+
+    .rail-btn:hover {
+      background: var(--surface-raised);
+    }
+
+    .rail-btn[data-active="true"] {
+      background: var(--surface);
+      border-color: var(--border);
+      color: var(--accent-cobalt);
+      font-weight: 600;
+    }
+
+    .kbd-pill {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 0.06rem 0.36rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface);
+    }
+
+    .rail-footer {
+      margin-top: auto;
+      padding-top: 0.75rem;
+      border-block-start: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+
+    /* Center Workspace Stage (Home + Workbench kept mounted) */
+    .stage-column {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+
+    .stage-topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1.25rem;
+      background: var(--surface);
+      border-block-end: 1px solid var(--border);
+    }
+
+    .kpi-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.9rem;
+    }
+
+    .kpi-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .kpi-chip strong {
+      color: var(--text);
+      font-family: var(--font-mono);
+    }
+
+    .stage-body {
+      padding: 1.15rem 1.25rem 2rem;
+      flex: 1;
+    }
+
+    .screen-view[hidden] {
+      display: none !important;
+    }
+
+    /* Buttons & Inputs */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      padding: 0.42rem 0.78rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.8125rem;
+      font-weight: 500;
+    }
+
+    .btn:hover { background: var(--surface-raised); }
+
+    .btn-primary {
+      background: var(--accent-cobalt);
+      border-color: var(--accent-cobalt);
+      color: #ffffff;
+    }
+    .btn-primary:hover { filter: brightness(1.08); background: var(--accent-cobalt); }
+
+    .btn-emerald {
+      border-color: var(--accent-emerald);
+      color: var(--accent-emerald);
+    }
+
+    .btn-danger {
+      border-color: var(--accent-crimson);
+      color: var(--accent-crimson);
+    }
+
+    .field-control {
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 0.8125rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.12rem 0.46rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      background: var(--surface-raised);
+    }
+    .badge-ok { color: var(--accent-emerald); border-color: var(--accent-emerald); }
+    .badge-warn { color: var(--accent-amber); border-color: var(--accent-amber); }
+    .badge-err { color: var(--accent-crimson); border-color: var(--accent-crimson); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    /* Home Screen (Idea Drop + Quick Playbooks) */
+    .home-hero {
+      max-width: 820px;
+      margin: 0.5rem auto 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1.15rem;
+    }
+
+    .home-headline {
+      margin: 0;
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .home-lead {
+      margin: 0.3rem 0 0;
+      color: var(--muted);
+      font-size: 0.875rem;
+    }
+
+    .idea-box {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .idea-textarea {
+      width: 100%;
+      min-height: 88px;
+      resize: vertical;
+      padding: 0.65rem 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 0.875rem;
+    }
+
+    .playbook-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .playbook-card {
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .playbook-card:hover {
+      border-color: var(--accent-cobalt);
+      background: var(--surface-raised);
+    }
+
+    /* Accessible Tabbed Workbench (modern-web-guidance: tabs) */
+    .tablist {
+      display: flex;
+      overflow-x: auto;
+      border-block-end: 1px solid var(--border);
+      scroll-snap-type: inline proximity;
+      margin-bottom: 0;
+    }
+
+    .tablist button {
+      flex: none;
+      scroll-snap-align: start;
+      position: relative;
+      padding: 0.62rem 0.9rem;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .tablist button:hover {
+      color: var(--text);
+    }
+
+    .tablist button[aria-selected="true"] {
+      color: var(--accent-cobalt);
+    }
+
+    .tablist button[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      border-block-end: 3px solid var(--accent-cobalt);
+    }
+
+    /* Place all panels in same grid cell & keep padding/border on child .panel-inner */
+    .tabpanels-stack {
+      display: grid;
+    }
+    .tabpanels-stack > [role="tabpanel"] {
+      grid-area: 1 / 1;
+      min-width: 0;
+    }
+    .panel-inner {
+      padding-block-start: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* Interactive SVG Organ & Bridge Wiring Graph */
+    .wiring-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+      gap: 0.9rem;
+    }
+    @media (max-width: 960px) {
+      .wiring-layout { grid-template-columns: 1fr; }
+    }
+
+    .svg-canvas-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+
+    /* Responsive Data Table (modern-web-guidance: responsive-table) */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(460px, 75vh);
+      container-type: inline-size;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.8125rem;
+    }
+
+    caption {
+      text-align: left;
+      padding: 0.65rem 0.85rem;
+      font-weight: 600;
+      border-block-end: 1px solid var(--border);
+      background: var(--surface-raised);
+    }
+
+    th, td {
+      padding: 0.58rem 0.75rem;
+      text-align: left;
+      border-block-end: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--surface-raised);
+    }
+
+    tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--surface);
+      font-weight: 600;
+    }
+
+    @container (width < 600px) {
+      table, thead, tbody, tr, th, td {
+        display: block;
+      }
+      thead {
+        display: none;
+      }
+      tr {
+        margin: 0.65rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--surface-raised);
+      }
+      td {
+        white-space: normal;
+      }
+      .pareto-table {
+        --label-2: "Composite";
+        --label-3: "Logprob G-Eval";
+        --label-4: "Tool Trace";
+        --label-5: "p95 Latency";
+        --label-6: "Cost / 1k";
+        --label-7: "Pareto";
+        --label-8: "Action";
+      }
+      .pareto-table td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 600; }
+      .pareto-table td:nth-child(8)::before { content: var(--label-8) ": "; font-weight: 600; }
+    }
+
+    /* Code preview block */
+    pre.code-block {
+      margin: 0;
+      padding: 0.8rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    /* Right Persistent Shared Agent & Proposal Column */
+    .agent-column {
+      background: var(--surface);
+      border-inline-start: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      max-height: 100vh;
+      position: sticky;
+      top: 0;
+    }
+
+    .agent-header {
+      padding: 0.75rem 0.9rem;
+      border-block-end: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .agent-stream {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .chat-bubble {
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 0.8125rem;
+    }
+
+    .chat-bubble[data-role="user"] {
+      background: var(--surface-raised);
+      border-color: var(--accent-cobalt);
+    }
+
+    .chat-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+      font-family: var(--font-mono);
+    }
+
+    .proposal-card {
+      border: 1px solid var(--accent-cobalt);
+      border-radius: 8px;
+      padding: 0.75rem;
+      background: var(--surface-raised);
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .proposal-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.2rem;
+    }
+
+    .composer-dock {
+      padding: 0.75rem;
+      border-block-start: 1px solid var(--border);
+      background: var(--rail);
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    /* Light-Dismiss Modal Dialog (modern-web-guidance: light-dismiss-a-dialog) */
+    dialog {
+      max-width: 720px;
+      width: calc(100% - 2rem);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 1.15rem;
+    }
+
+    dialog::backdrop {
+      background-color: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(2px);
+    }
+
+    .banner-status {
+      padding: 0.55rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      font-size: 0.8125rem;
+    }
+    .shield-row { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
+    .shield-switch { position:relative; width:2.6rem; height:1.4rem; border-radius:999px; border:1px solid var(--border); background:var(--surface-raised); cursor:pointer; padding:0; }
+    .shield-switch::after { content:''; position:absolute; top:2px; left:2px; width:1.05rem; height:1.05rem; border-radius:50%; background:var(--muted); transition:transform 0.15s ease; }
+    .shield-switch[aria-checked="true"] { background:var(--accent-emerald); }
+    .shield-switch[aria-checked="true"]::after { transform:translateX(1.2rem); background:#fff; }
+    .diff-view { font-family:var(--font-mono); font-size:0.72rem; max-height:14rem; overflow:auto; border:1px solid var(--border); border-radius:6px; }
+    .diff-line { white-space:pre-wrap; padding:0 0.4rem; }
+    .diff-line[data-kind="added"] { background:color-mix(in srgb, var(--accent-emerald) 16%, transparent); }
+    .diff-line[data-kind="removed"] { background:color-mix(in srgb, #e5484d 16%, transparent); }
+    .diff-line mark { background:color-mix(in srgb, currentColor 22%, transparent); color:inherit; border-radius:2px; }
+    .search-hit { border:1px solid var(--border); border-radius:6px; padding:0.45rem 0.6rem; }
+    .search-hit pre { margin:0.3rem 0 0; font-size:0.72rem; max-height:9rem; overflow:auto; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- LEFT PERSISTENT SHELL RAIL -->
+    <aside class="nav-rail" aria-label="Workspace navigation">
+      <div class="brand-mark">
+        <h1 class="brand-name">
+          <span>CARNOT</span>
+          <span id="tierBadge" class="badge badge-ok">PRO</span>
+        </h1>
+        <span class="brand-sub">Clean-Room App Refinery</span>
+      </div>
+
+      <div>
+        <div class="rail-section-label">Screens</div>
+        <div class="rail-list">
+          <button type="button" class="rail-btn" id="navHomeBtn" data-active="true">
+            <span>Home / Brainstorm</span>
+            <span class="kbd-pill">H</span>
+          </button>
+          <button type="button" class="rail-btn" id="navWorkbenchBtn" data-active="false">
+            <span>Workbench Board</span>
+            <span class="kbd-pill">W</span>
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="rail-section-label">Playbooks</div>
+        <div class="rail-list" id="railPlaybooks"></div>
+      </div>
+
+      <div class="rail-footer">
+        <label for="tierSelect" class="rail-section-label" style="padding:0;margin:0;">Entitlement Tier</label>
+        <select id="tierSelect" class="field-control">
+          <option value="pro">Pro Account (Full Machine)</option>
+          <option value="community">Community (Open Core)</option>
+        </select>
+
+        <div style="display:flex;gap:0.4rem;">
+          <button type="button" class="btn" id="themeToggleBtn" style="flex:1;">Theme: Auto</button>
+          <button type="button" class="btn" id="wireInspectBtn" title="Inspect Feature Toggle v2 Wire JSON">Wire</button>
+        </div>
+        <div style="display:flex;gap:0.4rem;">
+          <button type="button" class="btn" id="obligationsBtn" style="flex:1;" title="Obligations &amp; open unknowns closure verdict">Obligations</button>
+          <button type="button" class="btn" id="adviseBtn" style="flex:1;" title="Design-to-Language Fitness Matrix">Advisor</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER WORKSPACE COLUMN (Home & Workbench stay mounted) -->
+    <main class="stage-column">
+      <header class="stage-topbar">
+        <div class="kpi-strip">
+          <span class="kpi-chip">Organs: <strong id="kpiOrgans">3</strong></span>
+          <span class="kpi-chip">Quarantined Leaks: <strong id="kpiLeaks">0 B</strong></span>
+          <span class="kpi-chip">Pareto Leader: <strong id="kpiLeader">v2 (100.0%)</strong></span>
+          <span class="kpi-chip">Canary: <strong id="kpiCanary">0%</strong></span>
+          <span class="kpi-chip">Receipts: <strong id="kpiReceipts">1</strong></span>
+        </div>
+        <div id="flashBanner" class="badge">Ready — Ctrl+K focuses composer</div>
+      </header>
+
+      <div class="stage-body">
+        <!-- SCREEN 1: HOME (Idea Brainstorm + Playbook Launcher) -->
+        <section id="screenHome" class="screen-view" aria-label="Home Idea Intake">
+          <div class="home-hero">
+            <div>
+              <h2 class="home-headline">Drop an app idea. Brainstorm the organs. Ship behind flags.</h2>
+              <p class="home-lead">
+                Carnot scouts permissive building blocks, quarantines copyleft/EULA source (`0 bytes` leaked), stages an explicit
+                <strong>Accept / Decline</strong> blueprint card in the shared agent thread, and verifies every organ on a 3D Pareto shootout before canary cutover.
+              </p>
+            </div>
+
+            <div class="card idea-box">
+              <label for="homeIdeaInput" style="font-weight:600;font-size:0.84rem;">1. Brainstorm &amp; Stage Blueprint Proposal</label>
+              <textarea id="homeIdeaInput" class="idea-textarea" placeholder="e.g., Multi-tenant webhook gateway with rate limiting, schema validation, and signed audit receipts..."></textarea>
+              <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.6rem;">
+                <span style="font-size:0.78rem;color:var(--muted);">Stages a human-confirmed `ProposalCard` with automatic `EntropyBudget` creep check.</span>
+                <div style="display:flex;gap:0.5rem;">
+                  <button type="button" class="btn" id="openWorkbenchJumpBtn">Open Workbench</button>
+                  <button type="button" class="btn btn-primary" id="homeBrainstormBtn">Draft Blueprint Proposal</button>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="rail-section-label" style="padding:0;margin-bottom:0.5rem;">One-Click Engineering Playbooks</div>
+              <div class="playbook-grid" id="homePlaybookGrid"></div>
+            </div>
+
+            <form class="card" id="codeSearchForm" style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <label for="codeSearchInput" style="font-weight:600;font-size:0.84rem;">2. Hybrid Code Search (BM25 + embeddings + RRF)</label>
+                <span id="codeSearchBadge" class="badge">idle</span>
+              </div>
+              <div style="display:flex;gap:0.4rem;">
+                <input id="codeSearchInput" class="field-control" style="flex:1;" placeholder="e.g., murmurhash sticky variant bucketing">
+                <button type="submit" class="btn btn-primary">Search</button>
+              </div>
+              <div id="codeSearchResults" style="display:flex;flex-direction:column;gap:0.4rem;"></div>
+            </form>
+          </div>
+        </section>
+
+        <!-- SCREEN 2: WORKBENCH (6-Pane Engineering Board) -->
+        <section id="screenWorkbench" class="screen-view" hidden aria-label="Engineering Workbench">
+          <div class="tablist" focusgroup="tablist nomemory" aria-label="Carnot Workbench Panes" id="workbenchTablist">
+            <button type="button" id="tab-wiring_map" data-pane="wiring_map" aria-selected="true" focusgroupstart>1. Organ Wiring</button>
+            <button type="button" id="tab-dossier" data-pane="dossier" aria-selected="false">2. Dossier &amp; Polyglot</button>
+            <button type="button" id="tab-shootout" data-pane="shootout" aria-selected="false">3. Parallel Shootout</button>
+            <button type="button" id="tab-prune" data-pane="prune" aria-selected="false">4. Creep Pruner</button>
+            <button type="button" id="tab-cutover" data-pane="cutover" aria-selected="false">5. Canary Cutover</button>
+            <button type="button" id="tab-receipts" data-pane="receipts" aria-selected="false">6. SHA-256 Receipts</button>
+          </div>
+
+          <div class="tabpanels-stack">
+            <!-- PANE 1: INTERACTIVE SVG ORGAN & BRIDGE WIRING MAP -->
+            <div role="tabpanel" id="panel-wiring_map" aria-labelledby="tab-wiring_map" tabindex="0">
+              <div class="panel-inner">
+                <div class="wiring-layout">
+                  <div class="svg-canvas-wrap">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                      <strong>Live Organ &amp; Bridge Architecture (`Carnot.toml`)</strong>
+                      <span style="font-size:0.75rem;color:var(--muted);">Click any organ node to open its Dossier</span>
+                    </div>
+                    <svg id="wiringSvg" viewBox="0 0 680 280" width="100%" height="280" role="img" aria-label="Organ and bridge architecture diagram"></svg>
+                  </div>
+
+                  <div class="card" style="display:flex;flex-direction:column;gap:0.65rem;">
+                    <strong>Per-Organ Feature Flags (`Build Part-by-Part`)</strong>
+                    <p style="margin:0;font-size:0.78rem;color:var(--muted);">
+                      Every organ lands behind its own `organ.&lt;id&gt;.enabled` wire toggle so features can be isolated or pruned cleanly.
+                    </p>
+                    <div id="organFlagList" style="display:flex;flex-direction:column;gap:0.45rem;"></div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <strong>Active Inter-Organ Contracts (`OrganBridge`)</strong>
+                  <div id="bridgeList" style="margin-top:0.55rem;display:flex;flex-direction:column;gap:0.4rem;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 2: ORGAN DOSSIER & POLYGLOT BLUEPRINT -->
+            <div role="tabpanel" id="panel-dossier" aria-labelledby="tab-dossier" hidden="until-found">
+              <div class="panel-inner">
+                <div class="card" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;">
+                  <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                    <label for="dossierOrganSelect" style="font-weight:600;">Selected Organ:</label>
+                    <select id="dossierOrganSelect" class="field-control"></select>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                    <label for="polyglotLangSelect" style="font-weight:600;">Target Output Language:</label>
+                    <select id="polyglotLangSelect" class="field-control">
+                      <option value="rust">Rust (Cargo)</option>
+                      <option value="go">Go (go.mod)</option>
+                      <option value="typescript">TypeScript (Bun / Node)</option>
+                      <option value="python">Python (uv / pyproject)</option>
+                      <option value="scala3">Scala 3 (sbt)</option>
+                      <option value="zig">Zig (build.zig)</option>
+                      <option value="auto">AutoShootout (Benchmark Top 2)</option>
+                    </select>
+                    <button type="button" class="btn" id="evolveOrganBtn" title="UI runs demo offline; live worktree needs explicit_candidate (MCP/HTTP/CLI) until headless agent is wired">Evolve Organ</button>
+                    <button type="button" class="btn btn-primary" id="emitBlueprintBtn">Emit Blueprint</button>
+                  </div>
+                </div>
+
+                <div class="card" style="display:flex;flex-direction:column;gap:0.55rem;">
+                  <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.5rem;">
+                    <strong>Point Workspace &amp; Daemon Tick</strong>
+                    <span id="pointedWorkspaceBadge" class="badge">no workspace</span>
+                  </div>
+                  <div style="font-size:0.78rem;color:var(--muted);">
+                    Point a workspace for StageOnly live trials. Live path needs an <span class="mono">explicit_candidate</span> (MCP/HTTP/CLI); UI Evolve stays demo offline until headless agent is wired. Autopilot loops ticks (same skip without candidate) or use <span class="mono">carnot daemon --ticks N</span>.
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;">
+                    <input id="pointPathInput" class="field-control mono" style="flex:1;min-width:12rem;" placeholder="/path/to/workspace">
+                    <button type="button" class="btn btn-primary" id="pointWorkspaceBtn">Point</button>
+                    <button type="button" class="btn" id="daemonTickBtn">Daemon Tick</button>
+                    <label style="display:inline-flex;align-items:center;gap:0.35rem;font-size:0.78rem;color:var(--muted);">
+                      <input type="checkbox" id="autopilotToggle"> Autopilot ×3
+                    </label>
+                  </div>
+                </div>
+
+                <div id="organDossierCard" class="card"></div>
+                <div id="experienceCardsBox" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+
+                <div class="card" style="display:flex;flex-direction:column;gap:0.6rem;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+                    <strong id="blueprintTitle">Generated Polyglot Starter Blueprint</strong>
+                    <span id="blueprintCmds" class="mono" style="font-size:0.78rem;color:var(--muted);"></span>
+                  </div>
+                  <pre id="blueprintCode" class="code-block">Click "Emit Blueprint" to preview generated Carnot.toml + target scaffold.</pre>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 3: PARALLEL SHOOTOUT MATRIX -->
+            <div role="tabpanel" id="panel-shootout" aria-labelledby="tab-shootout" hidden="until-found">
+              <div class="panel-inner">
+                <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.6rem;">
+                  <div>
+                    <strong>Parallel Worktree &amp; 3D Pareto Conformance Shootout</strong>
+                    <div style="font-size:0.78rem;color:var(--muted);">Scores JSON schema, MCP tool-call traces (`any`/`all`/`ordered`/`never`), and probability-weighted `top_logprobs`.</div>
+                  </div>
+                  <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn" id="synthCasesBtn">+2 Adversarial Cases</button>
+                    <button type="button" class="btn btn-primary" id="reVerifyBtn">Run Shootout</button>
+                  </div>
+                </div>
+
+                <div tabindex="0" role="region" aria-labelledby="paretoCaption" class="table-wrapper">
+                  <table class="pareto-table">
+                    <caption id="paretoCaption">3D Pareto Matrix (Quality vs. p95 Latency vs. Cost / 1k)</caption>
+                    <thead>
+                      <tr>
+                        <th>Candidate Build</th>
+                        <th>Composite</th>
+                        <th>Logprob G-Eval</th>
+                        <th>Tool Trace</th>
+                        <th>p95 Latency</th>
+                        <th>Cost / 1k</th>
+                        <th>Pareto</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="paretoTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 4: ANTI-FEATURE-CREEP & CONSOLIDATION PRUNER -->
+            <div role="tabpanel" id="panel-prune" aria-labelledby="tab-prune" hidden="until-found">
+              <div class="panel-inner">
+                <div class="card" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;">
+                  <div>
+                    <strong>EntropyBudget &amp; Anti-Feature-Creep Auditor</strong>
+                    <div style="font-size:0.78rem;color:var(--muted);">Detects overlapping organ input/output schemas, excess bridge hops, and zero-traffic organ flags.</div>
+                  </div>
+                  <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn" id="runPruneAuditBtn">Re-Scan Entropy</button>
+                    <button type="button" class="btn btn-primary" id="runPrunePlaybookBtn">Stage Consolidation Card</button>
+                  </div>
+                </div>
+                <div id="creepFindingsList" style="display:flex;flex-direction:column;gap:0.65rem;"></div>
+              </div>
+            </div>
+
+            <!-- PANE 5: STRANGLER-FIG CANARY CUTOVER & <0.1ms CIRCUIT BREAKER -->
+            <div role="tabpanel" id="panel-cutover" aria-labelledby="tab-cutover" hidden="until-found">
+              <div class="panel-inner">
+                <div class="card" style="display:flex;flex-direction:column;gap:0.75rem;">
+                  <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.5rem;">
+                    <strong>Deterministic `MurmurHash3` Canary Splitter (`carnot.cutover.active_target`)</strong>
+                    <span id="cutoverStateBadge" class="badge">PINNED TO CONTROL</span>
+                  </div>
+                  <div id="cutoverSummaryText" style="font-size:0.82rem;color:var(--muted);"></div>
+                  <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+                    <button type="button" class="btn btn-primary" id="promoteWinnerBtn">Promote Winner (25% Canary)</button>
+                    <button type="button" class="btn btn-emerald" id="simHealthyBtn">Simulate 24 Healthy Reqs</button>
+                    <button type="button" class="btn btn-danger" id="simFaultBtn">Inject Fault (&lt;0.1ms Auto-Rollback)</button>
+                    <button type="button" class="btn" id="resetBreakerBtn">Reset Circuit Breaker</button>
+                  </div>
+                </div>
+
+                <div class="card" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.6rem;">
+                  <label for="evalUserInput" style="font-weight:600;">Test Deterministic User Stickiness:</label>
+                  <input id="evalUserInput" class="field-control mono" value="usr-0007" style="width:150px;">
+                  <button type="button" class="btn" id="evalUserBtn">Evaluate Variant</button>
+                  <span id="evalUserResult" class="mono" style="font-size:0.8rem;color:var(--muted);"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 6: CLEAN-ROOM IP CERTIFICATE & SHA-256 RECEIPTS -->
+            <div role="tabpanel" id="panel-receipts" aria-labelledby="tab-receipts" hidden="until-found">
+              <div class="panel-inner">
+                <div class="card" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.6rem;">
+                  <div>
+                    <strong>Clean-Room SPDX Firewall &amp; SHA-256 Provenance Ledger</strong>
+                    <div style="font-size:0.78rem;color:var(--muted);">Every scout ranking, build blueprint, Pareto shootout, and circuit-breaker verdict mints an immutable `ev_...` receipt.</div>
+                  </div>
+                  <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn" id="runScoutBtn">Run Multi-Repo Scout</button>
+                    <button type="button" class="btn btn-primary" id="openCertBtn">Inspect Clean-Room IP Cert</button>
+                  </div>
+                </div>
+
+                <div id="receiptsList" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- RIGHT PERSISTENT SHARED AGENT & PROPOSAL COLUMN -->
+    <aside class="agent-column" aria-label="Shared Agent Thread and Proposals">
+      <div class="agent-header">
+        <div>
+          <strong style="font-size:0.84rem;">Shared Agent Thread</strong>
+          <div style="font-size:0.75rem;color:var(--muted);">Persists across Home &amp; Workbench</div>
+        </div>
+        <select id="agentPicker" class="field-control" aria-label="Active local coding agent"></select>
+      </div>
+
+      <div class="agent-stream" id="agentStream"></div>
+
+      <form class="composer-dock" id="composerForm">
+        <label for="composerInput" style="font-size:0.75rem;font-weight:600;color:var(--muted);">Brainstorm organ or ask active agent (`Ctrl+K`)</label>
+        <div style="display:flex;gap:0.4rem;">
+          <input id="composerInput" class="field-control" style="flex:1;" placeholder="Add an organ, or /playbook-id to run a playbook..." required>
+          <button type="submit" class="btn btn-primary">Stage</button>
+        </div>
+      </form>
+    </aside>
+  </div>
+
+  <!-- LIGHT-DISMISS INSPECTOR DIALOG -->
+  <dialog id="inspectorDialog" closedby="any" aria-labelledby="inspectorDialogTitle">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:0.75rem;">
+      <h2 id="inspectorDialogTitle" style="margin:0;font-size:1rem;">Cryptographic Receipt Inspector</h2>
+      <form method="dialog" style="margin:0;">
+        <button type="submit" class="btn">Close</button>
+      </form>
+    </div>
+    <pre id="inspectorDialogPre" class="code-block" style="max-height:65vh;overflow:auto;"></pre>
+  </dialog>
+
+  <script>
+    (() => {
+      const dialog = document.getElementById('inspectorDialog');
+      // Mandatory fallback for browsers without declarative HTMLDialogElement.prototype.closedBy
+      if (dialog && !('closedBy' in HTMLDialogElement.prototype)) {
+        dialog.addEventListener('click', (event) => {
+          if (event.target !== dialog) return;
+          const rect = dialog.getBoundingClientRect();
+          const isDialogContent = (
+            rect.top <= event.clientY &&
+            event.clientY <= rect.top + rect.height &&
+            rect.left <= event.clientX &&
+            event.clientX <= rect.left + rect.width
+          );
+          if (isDialogContent) return;
+          dialog.close();
+        });
+      }
+
+      let appState = null;
+      let latestPlan = null;
+      const themes = ['auto', 'dark', 'light'];
+      let themeIdx = 0;
+
+      // Escapes server-provided values before interpolation into innerHTML templates (XSS guard).
+      function esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      // Renders `ProposalCard.diff_lines` (LCS line diff + intra-line changed span) using DOM nodes only.
+      function renderDiffView(diffLines) {
+        const box = document.createElement('div');
+        box.className = 'diff-view';
+        for (const dl of diffLines) {
+          const row = document.createElement('div');
+          row.className = 'diff-line';
+          row.dataset.kind = dl.kind;
+          const sigil = dl.kind === 'added' ? '+ ' : dl.kind === 'removed' ? '- ' : '  ';
+          const chars = Array.from(dl.text || '');
+          const span = dl.changed_span;
+          row.append(document.createTextNode(sigil));
+          if (span && span.end_col > span.start_col) {
+            row.append(document.createTextNode(chars.slice(0, span.start_col).join('')));
+            const mk = document.createElement('mark');
+            mk.textContent = chars.slice(span.start_col, span.end_col).join('');
+            row.append(mk, document.createTextNode(chars.slice(span.end_col).join('')));
+          } else {
+            row.append(document.createTextNode(chars.join('')));
+          }
+          box.appendChild(row);
+        }
+        return box;
+      }
+
+      function flash(msg, tone = '') {
+        const el = document.getElementById('flashBanner');
+        el.textContent = msg;
+        el.className = 'badge' + (tone === 'ok' ? ' badge-ok' : tone === 'warn' ? ' badge-warn' : tone === 'err' ? ' badge-err' : '');
+      }
+
+      async function api(path, opts = {}) {
+        const res = await fetch(path, {
+          headers: { 'Content-Type': 'application/json' },
+          ...opts
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || ('HTTP ' + res.status));
+        }
+        return data;
+      }
+
+      function openInspector(title, obj) {
+        document.getElementById('inspectorDialogTitle').textContent = title;
+        document.getElementById('inspectorDialogPre').textContent =
+          typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+        dialog.showModal();
+      }
+
+      function selectScreen(screen) {
+        const isHome = screen === 'home';
+        document.getElementById('screenHome').hidden = !isHome;
+        document.getElementById('screenWorkbench').hidden = isHome;
+        document.getElementById('navHomeBtn').dataset.active = String(isHome);
+        document.getElementById('navWorkbenchBtn').dataset.active = String(!isHome);
+      }
+
+      function selectPane(paneId, syncServer = true) {
+        const tablist = document.getElementById('workbenchTablist');
+        const tabs = Array.from(tablist.querySelectorAll('button[data-pane]'));
+        for (const tab of tabs) {
+          const active = tab.dataset.pane === paneId;
+          tab.setAttribute('aria-selected', String(active));
+          tab.toggleAttribute('focusgroupstart', active);
+          const panel = document.getElementById('panel-' + tab.dataset.pane);
+          if (panel) {
+            if (active) {
+              panel.removeAttribute('hidden');
+              panel.setAttribute('tabindex', '0');
+              tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            } else {
+              panel.setAttribute('hidden', 'until-found');
+              panel.removeAttribute('tabindex');
+            }
+          }
+        }
+        if (syncServer) {
+          api('/api/shell/navigate', {
+            method: 'POST',
+            body: JSON.stringify({ screen: 'workbench', pane: paneId })
+          }).catch(() => {});
+        }
+      }
+
+      // Keyboard navigation + selection-follows-focus on tablist
+      const tablistEl = document.getElementById('workbenchTablist');
+      tablistEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-pane]');
+        if (btn) selectPane(btn.dataset.pane, true);
+      });
+      tablistEl.addEventListener('keydown', (e) => {
+        if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) return;
+        const tabs = Array.from(tablistEl.querySelectorAll('button[data-pane]'));
+        const idx = tabs.indexOf(document.activeElement);
+        if (idx < 0) return;
+        e.preventDefault();
+        let next = idx;
+        if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+        if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+        if (e.key === 'Home') next = 0;
+        if (e.key === 'End') next = tabs.length - 1;
+        tabs[next].focus();
+        selectPane(tabs[next].dataset.pane, true);
+      });
+
+      // Sync hidden="until-found" find-in-page matches
+      document.querySelectorAll('[role="tabpanel"]').forEach((panel) => {
+        panel.addEventListener('beforematch', () => {
+          const paneId = panel.id.replace('panel-', '');
+          selectScreen('workbench');
+          selectPane(paneId, true);
+        });
+      });
+
+      function renderWiringSvg(machine) {
+        const svg = document.getElementById('wiringSvg');
+        const organs = machine.manifest.organs || [];
+        const bridges = machine.manifest.bridges || [];
+        const selected = machine.shell.selected_organ_id;
+
+        const positions = {};
+        const cols = Math.max(organs.length, 1);
+        const stepX = Math.min(205, Math.floor(620 / cols));
+        organs.forEach((org, idx) => {
+          const x = 35 + idx * stepX;
+          const y = (idx % 2 === 0) ? 48 : 148;
+          positions[org.id] = { x, y, w: 158, h: 74 };
+        });
+
+        let html = `
+          <defs>
+            <marker id="arrowHead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+        `;
+
+        for (const b of bridges) {
+          const from = positions[b.from_organ];
+          const to = positions[b.to_organ];
+          if (!from || !to) continue;
+          const x1 = from.x + from.w / 2;
+          const y1 = from.y + from.h / 2;
+          const x2 = to.x + to.w / 2;
+          const y2 = to.y + to.h / 2;
+          html += `<line x1="${esc(x1)}" y1="${esc(y1)}" x2="${esc(x2)}" y2="${esc(y2)}" stroke="var(--accent-cobalt)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arrowHead)" opacity="0.75"></line>`;
+        }
+
+        for (const org of organs) {
+          const pos = positions[org.id];
+          const enabled = machine.organ_flags[org.id] !== false;
+          const isSel = org.id === selected;
+          const stroke = isSel ? 'var(--accent-cobalt)' : enabled ? 'var(--accent-emerald)' : 'var(--muted)';
+          const sw = isSel ? 2.6 : 1.5;
+          html += `
+            <g class="organ-node" data-organ="${esc(org.id)}" style="cursor:pointer;">
+              <rect x="${esc(pos.x)}" y="${esc(pos.y)}" width="${esc(pos.w)}" height="${esc(pos.h)}" rx="8" fill="var(--surface-raised)" stroke="${esc(stroke)}" stroke-width="${esc(sw)}"></rect>
+              <text x="${esc(pos.x + 12)}" y="${esc(pos.y + 24)}" fill="var(--text)" font-size="13" font-weight="700" font-family="var(--font-mono)">${esc(org.id)}</text>
+              <text x="${esc(pos.x + 12)}" y="${esc(pos.y + 44)}" fill="var(--muted)" font-size="12">flag: ${esc(enabled ? 'ON' : 'OFF')}</text>
+              <text x="${esc(pos.x + 12)}" y="${esc(pos.y + 62)}" fill="var(--accent-cobalt)" font-size="12">Inspect dossier →</text>
+            </g>
+          `;
+        }
+        svg.innerHTML = html;
+        svg.querySelectorAll('.organ-node').forEach((node) => {
+          node.addEventListener('click', async () => {
+            const oid = node.getAttribute('data-organ');
+            await api('/api/shell/navigate', {
+              method: 'POST',
+              body: JSON.stringify({ screen: 'workbench', pane: 'dossier', organ_id: oid })
+            });
+            await refresh();
+          });
+        });
+      }
+
+      function renderAll() {
+        if (!appState) return;
+        const m = appState.machine;
+        const receipts = appState.evidence_summaries || [];
+
+        // Tier & KPIs
+        const isPro = m.tier === 'pro';
+        const tierBadge = document.getElementById('tierBadge');
+        tierBadge.textContent = isPro ? 'PRO' : 'COMMUNITY';
+        tierBadge.className = 'badge ' + (isPro ? 'badge-ok' : 'badge-warn');
+        document.getElementById('tierSelect').value = m.tier;
+
+        document.getElementById('kpiOrgans').textContent = String(m.manifest.organs.length);
+        document.getElementById('kpiLeaks').textContent = m.clean_room_cert.quarantined_source_bytes_read + ' B';
+        const leader = (m.latest_evals || [])[0];
+        document.getElementById('kpiLeader').textContent = leader
+          ? `${leader.variant_id} (${(leader.composite_score * 100).toFixed(1)}%)`
+          : 'n/a';
+        document.getElementById('kpiCanary').textContent = m.canary_rollout_pct + '%';
+        document.getElementById('kpiReceipts').textContent = String(receipts.length);
+
+        const wsRoot = m.workspace_root || (m.pointed_target && m.pointed_target.root) || null;
+        const pointedBadge = document.getElementById('pointedWorkspaceBadge');
+        const evolveBtn = document.getElementById('evolveOrganBtn');
+        if (wsRoot) {
+          pointedBadge.textContent = 'pointed — live needs explicit_candidate';
+          pointedBadge.className = 'badge badge-warn';
+          evolveBtn.textContent = 'Evolve Organ (demo offline)';
+          evolveBtn.title = 'UI has no candidate field — runs demo offline. Live worktree needs explicit_candidate via MCP/HTTP/CLI until headless agent is wired.';
+          const pathInp = document.getElementById('pointPathInput');
+          if (pathInp && !pathInp.value) pathInp.value = wsRoot;
+        } else {
+          pointedBadge.textContent = 'no workspace — evolve runs demo offline';
+          pointedBadge.className = 'badge badge-warn';
+          evolveBtn.textContent = 'Evolve Organ (demo offline)';
+          evolveBtn.title = 'No workspace: offline 3-island demo. Live needs pointed workspace + explicit_candidate.';
+        }
+
+        // Screen & Tab sync
+        selectScreen(m.shell.active_screen === 'home' ? 'home' : 'workbench');
+        selectPane(m.shell.active_pane || 'wiring_map', false);
+
+        // Playbooks in Left Rail & Home Grid
+        const railPb = document.getElementById('railPlaybooks');
+        const homePb = document.getElementById('homePlaybookGrid');
+        railPb.innerHTML = '';
+        homePb.innerHTML = '';
+        (m.playbooks || []).forEach((pb) => {
+          const rBtn = document.createElement('button');
+          rBtn.type = 'button';
+          rBtn.className = 'rail-btn';
+          rBtn.innerHTML = `<span>${esc(pb.title)}</span><span class="kbd-pill">${esc(pb.shortcut)}</span>`;
+          rBtn.addEventListener('click', () => triggerPlaybook(pb.id));
+          railPb.appendChild(rBtn);
+
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'playbook-card';
+          card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
+              <strong style="font-size:0.85rem;">${esc(pb.title)}</strong>
+              <span class="badge">${esc(pb.stage)}</span>
+            </div>
+            <span style="font-size:0.78rem;color:var(--muted);">${esc(pb.summary)}</span>
+          `;
+          card.addEventListener('click', () => triggerPlaybook(pb.id));
+          homePb.appendChild(card);
+        });
+
+        // Wiring Map + Organ Flags + Bridges
+        renderWiringSvg(m);
+        const flagList = document.getElementById('organFlagList');
+        flagList.innerHTML = '';
+        (m.manifest.organs || []).forEach((org) => {
+          const enabled = m.organ_flags[org.id] !== false;
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.55rem;border:1px solid var(--border);border-radius:6px;';
+          row.innerHTML = `
+            <span class="mono" style="font-size:0.78rem;">organ.${esc(org.id)}.enabled</span>
+            <button type="button" class="btn" style="padding:0.2rem 0.55rem;font-size:0.75rem;">${esc(enabled ? 'Enabled' : 'Disabled')}</button>
+          `;
+          row.querySelector('button').addEventListener('click', async () => {
+            try {
+              await api('/api/organ/flag', {
+                method: 'POST',
+                body: JSON.stringify({ organ_id: org.id, enabled: !enabled })
+              });
+              flash(`Toggled organ.${org.id}.enabled -> ${!enabled}`, 'ok');
+              await refresh();
+            } catch (err) {
+              flash(err.message, 'err');
+            }
+          });
+          flagList.appendChild(row);
+        });
+
+        const bridgeList = document.getElementById('bridgeList');
+        bridgeList.innerHTML = '';
+        (m.manifest.bridges || []).forEach((b) => {
+          const item = document.createElement('div');
+          item.style.cssText = 'font-size:0.8rem;padding:0.4rem 0.6rem;border-radius:6px;background:var(--surface-raised);';
+          item.innerHTML = `<span class="mono" style="font-weight:600;">${esc(b.from_organ)} → ${esc(b.to_organ)}</span>: ${esc(b.contract)}`;
+          bridgeList.appendChild(item);
+        });
+
+        // Dossier Organ Select & Details
+        const orgSel = document.getElementById('dossierOrganSelect');
+        orgSel.innerHTML = '';
+        (m.manifest.organs || []).forEach((org) => {
+          const opt = document.createElement('option');
+          opt.value = org.id;
+          opt.textContent = `${org.id} — ${org.capability.slice(0, 44)}`;
+          if (org.id === m.shell.selected_organ_id) opt.selected = true;
+          orgSel.appendChild(opt);
+        });
+        const curOrg = (m.manifest.organs || []).find((o) => o.id === m.shell.selected_organ_id) || m.manifest.organs[0];
+        if (curOrg) {
+          document.getElementById('organDossierCard').innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;">
+              <strong class="mono" style="font-size:0.95rem;">Organ: ${esc(curOrg.id)}</strong>
+              <span class="badge badge-ok">Suite: ${esc(curOrg.conformance_suite)}</span>
+            </div>
+            <p style="margin:0 0 0.5rem;font-size:0.82rem;">${esc(curOrg.capability)}</p>
+            <div style="font-size:0.78rem;color:var(--muted);">
+              <div><strong>Inputs:</strong> <span class="mono">${esc(curOrg.inputs.join(', '))}</span> | <strong>Outputs:</strong> <span class="mono">${esc(curOrg.outputs.join(', '))}</span></div>
+              <div style="margin-top:0.25rem;"><strong>Invariants:</strong> ${esc(curOrg.invariants.join(' • '))}</div>
+            </div>
+          `;
+          const expBox = document.getElementById('experienceCardsBox');
+          expBox.innerHTML = '';
+          (m.experience_cards || [])
+            .filter((c) => c.organ_id === curOrg.id)
+            .forEach((c) => {
+              const ec = document.createElement('div');
+              ec.className = 'card';
+              ec.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.35rem;">
+                  <strong>Experience Card ${esc(c.card_id)}: ${esc(c.pattern_title)}</strong>
+                  <span class="badge badge-ok">${esc((c.baseline_score * 100).toFixed(1))}% → ${esc((c.achieved_score * 100).toFixed(1))}% (${esc(c.p95_latency_ms)}ms) • ${esc(c.receipt_id)}</span>
+                </div>
+                <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.45rem;">${esc(c.actionable_lesson)}</div>
+                <pre class="code-block">// EVOLVE_START\n${esc(c.evolved_block_code)}\n// EVOLVE_END</pre>
+              `;
+              expBox.appendChild(ec);
+            });
+        }
+
+        // Pareto Shootout Table
+        const tbody = document.getElementById('paretoTbody');
+        tbody.innerHTML = '';
+        (m.latest_evals || []).forEach((ev) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <th scope="row" class="mono">${esc(ev.variant_id)}</th>
+            <td class="num">${esc((ev.composite_score * 100).toFixed(1))}%</td>
+            <td class="num">${esc((ev.mean_g_eval * 100).toFixed(1))}%</td>
+            <td class="num">${esc((ev.tool_trace_pass_rate * 100).toFixed(0))}%</td>
+            <td class="num">${esc(ev.p95_latency_ms)} ms</td>
+            <td class="num">$${esc(ev.cost_per_1k_usd.toFixed(4))}</td>
+            <td><span class="badge ${esc(ev.pareto_optimal ? 'badge-ok' : '')}">${esc(ev.pareto_optimal ? 'PARETO OPTIMAL' : 'Dominated')}</span></td>
+            <td><button type="button" class="btn" style="padding:0.22rem 0.55rem;font-size:0.75rem;">Promote 25%</button></td>
+          `;
+          tr.querySelector('button').addEventListener('click', async () => {
+            try {
+              await api('/api/cutover/promote', {
+                method: 'POST',
+                body: JSON.stringify({ variant_id: ev.variant_id, rollout_pct: 25 })
+              });
+              flash(`Promoted ${ev.variant_id} to 25% canary`, 'ok');
+              await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ screen: 'workbench', pane: 'cutover' }) });
+              await refresh();
+            } catch (err) {
+              flash(err.message, 'err');
+            }
+          });
+          tbody.appendChild(tr);
+        });
+
+        // Creep Findings
+        const creepBox = document.getElementById('creepFindingsList');
+        creepBox.innerHTML = '';
+        (m.creep_findings || []).forEach((cf) => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          const cls = cf.severity === 'ok' ? 'badge-ok' : cf.severity === 'advisory' ? 'badge-warn' : 'badge-err';
+          div.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem;">
+              <strong>${esc(cf.title)}</strong>
+              <span class="badge ${esc(cls)}">-${esc(cf.estimated_bloat_reduction_pct)}% bloat</span>
+            </div>
+            <div style="font-size:0.8125rem;color:var(--muted);">${esc(cf.recommendation)}</div>
+          `;
+          creepBox.appendChild(div);
+        });
+
+        // Cutover Status
+        const cutBadge = document.getElementById('cutoverStateBadge');
+        if (m.killswitch_tripped) {
+          cutBadge.textContent = 'CIRCUIT BREAKER TRIPPED (0% CANARY)';
+          cutBadge.className = 'badge badge-err';
+        } else if (m.canary_rollout_pct > 0) {
+          cutBadge.textContent = `LIVE CANARY: ${m.canary_variant_id} @ ${m.canary_rollout_pct}%`;
+          cutBadge.className = 'badge badge-ok';
+        } else {
+          cutBadge.textContent = `100% CONTROL (${m.control_variant_id})`;
+          cutBadge.className = 'badge';
+        }
+        document.getElementById('cutoverSummaryText').textContent = m.trip_reason
+          ? `${m.trip_reason} • Auto-captured ${m.regressions_captured} regression case(s) into suite.`
+          : `Control: ${m.control_variant_id} | Telemetry window: ${m.telemetry_window.length} reqs | Captured regressions: ${m.regressions_captured}`;
+
+        // Receipts
+        const rBox = document.getElementById('receiptsList');
+        rBox.innerHTML = '';
+        receipts.slice().reverse().forEach((r) => {
+          const row = document.createElement('div');
+          row.className = 'card';
+          row.style.cssText = 'padding:0.65rem 0.85rem;display:flex;justify-content:space-between;align-items:center;gap:0.6rem;flex-wrap:wrap;';
+          row.innerHTML = `
+            <div>
+              <span class="mono" style="font-weight:600;">${esc(r.id)}</span>
+              <span class="badge" style="margin-inline-start:0.4rem;">${esc(r.stage)}</span>
+              <div style="font-size:0.78rem;color:var(--muted);margin-top:0.2rem;">${esc(r.summary)}</div>
+            </div>
+            <button type="button" class="btn" style="font-size:0.75rem;">Inspect SHA-256</button>
+          `;
+          row.querySelector('button').addEventListener('click', async () => {
+            const page = await api('/api/evidence/' + r.id);
+            openInspector(`Receipt ${r.id} (SHA-256: ${page.sha256})`, page);
+          });
+          rBox.appendChild(row);
+        });
+
+        // Agent Picker & Shared Stream (Chat + ProposalCards)
+        const picker = document.getElementById('agentPicker');
+        picker.innerHTML = '';
+        (m.agents || []).forEach((ag) => {
+          const opt = document.createElement('option');
+          opt.value = ag.id;
+          opt.textContent = `${ag.display_name} ${ag.detected_on_host ? '● local' : '○ sim'}`;
+          if (ag.id === m.shell.active_agent_id) opt.selected = true;
+          picker.appendChild(opt);
+        });
+
+        const propMap = {};
+        (m.shell.proposals || []).forEach((p) => { propMap[p.id] = p; });
+
+        const stream = document.getElementById('agentStream');
+        stream.innerHTML = '';
+        (m.shell.chat || []).forEach((entry) => {
+          const wrap = document.createElement('div');
+          wrap.style.display = 'flex';
+          wrap.style.flexDirection = 'column';
+          wrap.style.gap = '0.45rem';
+
+          const bubble = document.createElement('div');
+          bubble.className = 'chat-bubble';
+          bubble.dataset.role = entry.role;
+          bubble.innerHTML = `
+            <div class="chat-meta"><span>@${esc(entry.author)}</span><span>#${esc(entry.seq)}</span></div>
+            <div>${esc(entry.text)}</div>
+          `;
+          wrap.appendChild(bubble);
+
+          if (entry.proposal_id && propMap[entry.proposal_id]) {
+            const p = propMap[entry.proposal_id];
+            const pCard = document.createElement('div');
+            pCard.className = 'proposal-card';
+            const stBadge = p.state === 'accepted' ? 'badge-ok' : p.state === 'declined' ? 'badge-err' : 'badge-warn';
+            pCard.innerHTML = `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
+                <strong style="font-size:0.82rem;">${esc(p.title)}</strong>
+                <span class="badge ${esc(stBadge)}">${esc(p.state.toUpperCase())}</span>
+              </div>
+              <div style="font-size:0.78rem;color:var(--muted);">${esc(p.summary)}</div>
+              <div><span class="badge">${esc(p.impact_badge)}</span></div>
+              <div class="proposal-actions"></div>
+            `;
+            const actRow = pCard.querySelector('.proposal-actions');
+            if (Array.isArray(p.diff_lines) && p.diff_lines.length) {
+              const det = document.createElement('details');
+              const sum = document.createElement('summary');
+              sum.style.cssText = 'font-size:0.75rem;cursor:pointer;';
+              const adds = p.diff_lines.filter((d) => d.kind === 'added').length;
+              const dels = p.diff_lines.filter((d) => d.kind === 'removed').length;
+              sum.textContent = `Carnot.toml diff (+${adds} / -${dels})`;
+              det.append(sum, renderDiffView(p.diff_lines));
+              pCard.insertBefore(det, actRow);
+            }
+            if (p.state === 'pending') {
+              const acc = document.createElement('button');
+              acc.type = 'button';
+              acc.className = 'btn btn-primary';
+              acc.style.fontSize = '0.75rem';
+              acc.textContent = 'Accept Proposal';
+              acc.addEventListener('click', () => decideProposal(p.id, 'accept'));
+
+              const dec = document.createElement('button');
+              dec.type = 'button';
+              dec.className = 'btn';
+              dec.style.fontSize = '0.75rem';
+              dec.textContent = 'Decline';
+              dec.addEventListener('click', () => decideProposal(p.id, 'decline'));
+              actRow.append(acc, dec);
+            } else if (p.state === 'accepted' && p.can_undo) {
+              const undo = document.createElement('button');
+              undo.type = 'button';
+              undo.className = 'btn';
+              undo.style.fontSize = '0.75rem';
+              undo.textContent = 'Undo / Revert';
+              undo.addEventListener('click', () => decideProposal(p.id, 'undo'));
+              actRow.appendChild(undo);
+            }
+            wrap.appendChild(pCard);
+          }
+
+          stream.appendChild(wrap);
+        });
+        stream.scrollTop = stream.scrollHeight;
+      }
+
+      async function decideProposal(proposalId, decision) {
+        try {
+          await api('/api/proposal/decide', {
+            method: 'POST',
+            body: JSON.stringify({ proposal_id: proposalId, decision })
+          });
+          flash(`Proposal ${proposalId}: ${decision}`, 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      }
+
+      async function triggerPlaybook(playbookId) {
+        try {
+          const res = await api('/api/playbook/run', {
+            method: 'POST',
+            body: JSON.stringify({ playbook_id: playbookId })
+          });
+          flash(res.summary, 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      }
+
+      async function refresh() {
+        appState = await api('/api/state');
+        renderAll();
+      }
+
+      // Wire Controls
+      document.getElementById('navHomeBtn').addEventListener('click', async () => {
+        await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ screen: 'home' }) });
+        await refresh();
+      });
+      document.getElementById('navWorkbenchBtn').addEventListener('click', async () => {
+        await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ screen: 'workbench' }) });
+        await refresh();
+      });
+      document.getElementById('openWorkbenchJumpBtn').addEventListener('click', async () => {
+        await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ screen: 'workbench' }) });
+        await refresh();
+      });
+
+      document.getElementById('homeBrainstormBtn').addEventListener('click', async () => {
+        const val = document.getElementById('homeIdeaInput').value.trim() || 'webhook rate limiter with audit receipts';
+        await api('/api/chat/submit', { method: 'POST', body: JSON.stringify({ prompt: val }) });
+        document.getElementById('homeIdeaInput').value = '';
+        flash('Staged blueprint confirmation card in shared agent thread', 'ok');
+        await refresh();
+      });
+
+      document.getElementById('composerForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const inp = document.getElementById('composerInput');
+        const val = inp.value.trim();
+        if (!val) return;
+        inp.value = '';
+        // `/playbook-id` runs a playbook (built-in or workspace `.carnot/playbooks/<id>/SKILL.md`).
+        if (val.startsWith('/')) {
+          const q = val.slice(1).trim().toLowerCase();
+          const pbs = (appState && appState.machine.playbooks) || [];
+          const pb = pbs.find((x) => x.id === q) || pbs.find((x) => x.id.startsWith(q) || x.title.toLowerCase().includes(q));
+          if (pb) {
+            await triggerPlaybook(pb.id);
+          } else {
+            flash(`No playbook matches '/${q}'. Available: ${pbs.map((x) => '/' + x.id).join(' ')}`, 'warn');
+          }
+          return;
+        }
+        try {
+          await api('/api/chat/submit', { method: 'POST', body: JSON.stringify({ prompt: val }) });
+          flash('Proposal card staged — review Accept / Decline in thread', 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('agentPicker').addEventListener('change', async (e) => {
+        await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ agent_id: e.target.value }) });
+        await refresh();
+      });
+
+      document.getElementById('dossierOrganSelect').addEventListener('change', async (e) => {
+        await api('/api/shell/navigate', { method: 'POST', body: JSON.stringify({ organ_id: e.target.value }) });
+        await refresh();
+      });
+
+      document.getElementById('pointWorkspaceBtn').addEventListener('click', async () => {
+        try {
+          const path = document.getElementById('pointPathInput').value.trim();
+          if (!path) {
+            flash('Enter a workspace path to Point', 'warn');
+            return;
+          }
+          const target = await api('/api/point', {
+            method: 'POST',
+            body: JSON.stringify({ path })
+          });
+          flash(`Pointed workspace ${target.root}`, 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('daemonTickBtn').addEventListener('click', async () => {
+        try {
+          const autopilot = document.getElementById('autopilotToggle').checked;
+          if (autopilot) {
+            const reps = await api('/api/daemon/autopilot', {
+              method: 'POST',
+              body: JSON.stringify({ ticks: 3 })
+            });
+            const list = Array.isArray(reps) ? reps : (reps.reports || []);
+            const skipped = list.filter((r) => r.skipped_reason).length;
+            const staged = list.filter((r) => r.staged_trial_id).length;
+            flash(
+              `Autopilot ×${list.length}: ${staged} staged, ${skipped} skipped (needs explicit_candidate or use CLI carnot daemon --ticks)`,
+              staged ? 'ok' : 'warn'
+            );
+          } else {
+            const rep = await api('/api/daemon/tick', {
+              method: 'POST',
+              body: '{}'
+            });
+            if (rep.skipped_reason) {
+              flash(`Daemon tick skipped: ${rep.skipped_reason}`, 'warn');
+            } else if (rep.staged_trial_id) {
+              flash(`Daemon tick staged trial ${rep.staged_trial_id} (Accept in agent thread)`, 'ok');
+            } else if (rep.ratcheted) {
+              flash(`Daemon tick ratcheted organ ${rep.organ_id || ''}`, 'ok');
+            } else {
+              flash(`Daemon tick complete (${rep.organ_id || 'n/a'})`, 'ok');
+            }
+          }
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('evolveOrganBtn').addEventListener('click', async () => {
+        try {
+          const oid = document.getElementById('dossierOrganSelect').value;
+          // UI has no candidate field — always demo offline until headless agent is wired.
+          const rep = await api('/api/evolve/run', {
+            method: 'POST',
+            body: JSON.stringify({ organ_id: oid, generations: 6, demo: true })
+          });
+          document.getElementById('blueprintTitle').textContent = `Evolved Organ Harness (${rep.organ_id}) — ${(rep.best_score * 100).toFixed(1)}% @ ${rep.best_p95_latency_ms}ms`;
+          document.getElementById('blueprintCmds').textContent = `${rep.total_evaluations} evals | ${rep.rejected_candidates} rejected | ${rep.experience_cards.length} Experience Cards`;
+          document.getElementById('blueprintCode').textContent = rep.evolved_harness_preview;
+          flash(
+            `Demo-offline evolved '${rep.organ_id}' across 3 islands (+${rep.experience_cards.length} Experience Cards; live needs explicit_candidate)`,
+            'ok'
+          );
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('emitBlueprintBtn').addEventListener('click', async () => {
+        const lang = document.getElementById('polyglotLangSelect').value;
+        latestPlan = await api('/api/build/plan', {
+          method: 'POST',
+          body: JSON.stringify({ target_language: lang })
+        });
+        document.getElementById('blueprintTitle').textContent = `Blueprint (${latestPlan.target_language}) — ${latestPlan.planned_files.length} files`;
+        document.getElementById('blueprintCmds').textContent = `${latestPlan.build_command}  |  ${latestPlan.test_command}  |  ${latestPlan.bench_command || ''}`;
+        document.getElementById('blueprintCode').textContent = latestPlan.planned_files
+          .map((f) => {
+            const [relPath, snippet] = Array.isArray(f) ? f : [f.path, f.preview_snippet];
+            return `// === FILE: ${relPath} ===\n${snippet}`;
+          })
+          .join('\n\n');
+        flash(`Emitted ${latestPlan.target_language} blueprint`, 'ok');
+        await refresh();
+      });
+
+      document.getElementById('synthCasesBtn').addEventListener('click', async () => {
+        await api('/api/dataset/synthesize', { method: 'POST', body: JSON.stringify({ count: 2 }) });
+        flash('Synthesized +2 adversarial test vectors & re-scored shootout', 'ok');
+        await refresh();
+      });
+
+      document.getElementById('reVerifyBtn').addEventListener('click', async () => {
+        await api('/api/verify/run', { method: 'POST', body: '{}' });
+        flash('3D Pareto conformance shootout updated', 'ok');
+        await refresh();
+      });
+
+      document.getElementById('runPruneAuditBtn').addEventListener('click', async () => {
+        await api('/api/prune/audit', { method: 'POST', body: '{}' });
+        flash('EntropyBudget scan completed', 'ok');
+        await refresh();
+      });
+
+      document.getElementById('runPrunePlaybookBtn').addEventListener('click', () => triggerPlaybook('prune-feature-creep'));
+
+      document.getElementById('promoteWinnerBtn').addEventListener('click', async () => {
+        try {
+          await api('/api/cutover/promote', {
+            method: 'POST',
+            body: JSON.stringify({ variant_id: 'v2-carnot-consolidated', rollout_pct: 25 })
+          });
+          flash('Promoted v2-carnot-consolidated to 25% MurmurHash3 canary', 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('simHealthyBtn').addEventListener('click', async () => {
+        try {
+          await api('/api/cutover/simulate', { method: 'POST', body: JSON.stringify({ requests: 24, inject_fault: false }) });
+          flash('24 healthy requests served across canary & control', 'ok');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('simFaultBtn').addEventListener('click', async () => {
+        try {
+          await api('/api/cutover/simulate', { method: 'POST', body: JSON.stringify({ requests: 36, inject_fault: true }) });
+          flash('Circuit breaker tripped in <0.1ms — restored 100% control & captured regression!', 'warn');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('resetBreakerBtn').addEventListener('click', async () => {
+        await api('/api/killswitch/reset', { method: 'POST', body: '{}' });
+        flash('Circuit breaker reset; 100% pinned to control', 'ok');
+        await refresh();
+      });
+
+      document.getElementById('evalUserBtn').addEventListener('click', async () => {
+        const uid = document.getElementById('evalUserInput').value.trim() || 'usr-0007';
+        const res = await api('/api/cutover/evaluate', { method: 'POST', body: JSON.stringify({ user_id: uid }) });
+        document.getElementById('evalUserResult').textContent = `→ ${res.variant.name} (variant enabled=${res.variant.enabled}, feature enabled=${res.variant.feature_enabled})`;
+      });
+
+      document.getElementById('runScoutBtn').addEventListener('click', async () => {
+        try {
+          const ranked = await api('/api/scout', { method: 'POST', body: '{}' });
+          openInspector('Multi-Repo Signal-to-Bloat Ranking', ranked);
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('openCertBtn').addEventListener('click', async () => {
+        try {
+          const cert = await api('/api/intake/cert');
+          openInspector('SHA-256 Clean-Room IP Provenance Certificate', cert);
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('wireInspectBtn').addEventListener('click', async () => {
+        const wire = await api('/api/client/features');
+        openInspector('Feature Toggle v2 Wire Payload (/api/client/features)', wire);
+      });
+
+      document.getElementById('shieldSwitch').addEventListener('click', async (e) => {
+        const next = e.currentTarget.getAttribute('aria-checked') !== 'true';
+        if (!next && !confirm('Turn Black-Box Shield OFF? Only do this for permissive (MIT/Apache/BSD) or owned code. The switch is recorded in the Clean-Room Certificate.')) {
+          return;
+        }
+        try {
+          const cert = await api('/api/intake/black-box', { method: 'POST', body: JSON.stringify({ enforced: next }) });
+          flash(next ? `Black-Box Shield ON (cert ${cert.receipt_id})` : `White-box inspection mode (cert ${cert.receipt_id})`, next ? 'ok' : 'warn');
+          await refresh();
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('codeSearchForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const q = document.getElementById('codeSearchInput').value.trim();
+        if (!q) return;
+        const badge = document.getElementById('codeSearchBadge');
+        const out = document.getElementById('codeSearchResults');
+        badge.textContent = 'searching…';
+        badge.className = 'badge';
+        try {
+          const rep = await api('/api/codesearch', { method: 'POST', body: JSON.stringify({ query: q, top_k: 6 }) });
+          badge.textContent = `${rep.hits.length} hits · ~${rep.estimated_tokens_saved} tokens saved (${rep.token_reduction_pct}%) · ${rep.black_box_enforced ? rep.quarantined_files_skipped + ' quarantined skipped' : 'white-box'}`;
+          badge.className = 'badge badge-ok';
+          out.replaceChildren();
+          for (const h of rep.hits) {
+            const card = document.createElement('div');
+            card.className = 'search-hit';
+            const head = document.createElement('div');
+            head.className = 'mono';
+            head.style.fontSize = '0.75rem';
+            head.textContent = `${h.file_path}:${h.start_line}-${h.end_line}  (score ${h.score})`;
+            const pre = document.createElement('pre');
+            pre.className = 'code-block';
+            pre.textContent = h.content;
+            card.append(head, pre);
+            out.appendChild(card);
+          }
+        } catch (err) {
+          badge.textContent = 'error';
+          badge.className = 'badge badge-err';
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('obligationsBtn').addEventListener('click', async () => {
+        try {
+          openInspector('Obligations & Unknowns Closure Verdict', await api('/api/obligations'));
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('adviseBtn').addEventListener('click', async () => {
+        try {
+          openInspector('Design-to-Language Fitness Matrix', await api('/api/advise/languages'));
+        } catch (err) {
+          flash(err.message, 'err');
+        }
+      });
+
+      document.getElementById('tierSelect').addEventListener('change', async (e) => {
+        await api('/api/tier', { method: 'POST', body: JSON.stringify({ tier: e.target.value }) });
+        flash(`Switched entitlement tier to ${e.target.value}`, 'warn');
+        await refresh();
+      });
+
+      document.getElementById('themeToggleBtn').addEventListener('click', (e) => {
+        themeIdx = (themeIdx + 1) % themes.length;
+        const mode = themes[themeIdx];
+        if (mode === 'auto') {
+          document.documentElement.removeAttribute('data-theme');
+        } else {
+          document.documentElement.setAttribute('data-theme', mode);
+        }
+        e.currentTarget.textContent = 'Theme: ' + mode[0].toUpperCase() + mode.slice(1);
+      });
+
+      // Global Keyboard Shortcuts (guarded so typing inside inputs never triggers shortcuts)
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          document.getElementById('composerInput').focus();
+          return;
+        }
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.ctrlKey || e.metaKey || e.altKey) {
+          return;
+        }
+        if (e.key.toLowerCase() === 'h') {
+          document.getElementById('navHomeBtn').click();
+        } else if (e.key.toLowerCase() === 'w') {
+          document.getElementById('navWorkbenchBtn').click();
+        } else if (['1', '2', '3', '4', '5', '6'].includes(e.key)) {
+          const panes = ['wiring_map', 'dossier', 'shootout', 'prune', 'cutover', 'receipts'];
+          selectScreen('workbench');
+          selectPane(panes[Number(e.key) - 1], true);
+        }
+      });
+
+      refresh().catch((err) => flash(err.message, 'err'));
+    })();
+  </script>
+</body>
+</html>

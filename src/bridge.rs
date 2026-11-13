@@ -519,7 +519,7 @@ impl CarnotMachine {
 
         machine.bind_disk_state(dir)?;
 
-        let zones = scan_directory_spdx_zones(dir).unwrap_or_default();
+        let zones = Self::scan_zones_or_refuse(dir)?;
         machine.clean_room_cert = build_clean_room_certificate_full(
             zones,
             Vec::new(),
@@ -564,6 +564,21 @@ impl CarnotMachine {
         machine.sync_rollout_flag();
         machine.audit_feature_creep();
         Ok(machine)
+    }
+
+    /// A license scan error must not become an empty zone list. An empty list
+    /// still mints a certificate and leaves `quarantined_prefixes` with nothing
+    /// to refuse.
+    fn scan_zones_or_refuse(
+        dir: &std::path::Path,
+    ) -> Result<Vec<crate::intake::IntakeZoneDecision>, String> {
+        scan_directory_spdx_zones(dir).map_err(|e| {
+            format!(
+                "Refusing to certify '{}': license scan failed ({})",
+                dir.display(),
+                e
+            )
+        })
     }
 
     /// Replace in-memory demo fixtures with the workspace files on disk.
@@ -1636,7 +1651,7 @@ impl CarnotMachine {
             .map_err(|e| format!("Failed to create gym dir '{}': {}", gym_dir.display(), e))?;
 
         self.bind_disk_state(&target.root)?;
-        let zones = scan_directory_spdx_zones(&target.root).unwrap_or_default();
+        let zones = Self::scan_zones_or_refuse(&target.root)?;
         self.clean_room_cert = build_clean_room_certificate_full(
             zones,
             Vec::new(),

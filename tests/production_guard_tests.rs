@@ -3,7 +3,8 @@
 
 use carnot::bridge::CarnotMachine;
 use carnot::intake::{
-    detect_manifest_spdx, policy_for_spdx, scan_directory_spdx_zones, AccessPolicy,
+    classify_license_text, detect_manifest_spdx, policy_for_spdx, scan_directory_spdx_zones,
+    AccessPolicy,
 };
 use carnot::scout::TargetLanguage;
 #[cfg(unix)]
@@ -211,5 +212,49 @@ fn cli_help_is_the_default_and_generate_requires_init() {
     assert!(
         scan_err.to_lowercase().contains("json") || scan_err.contains("manifest"),
         "stderr: {scan_err}"
+    );
+}
+
+#[test]
+fn mentioning_mit_without_the_grant_is_not_permissive() {
+    let disclaimer = "The MIT license terms do not apply to this tree.\nAll rights reserved.\n";
+    let classified = classify_license_text(disclaimer);
+    assert_ne!(classified, "MIT");
+    assert_ne!(
+        policy_for_spdx(&classified),
+        AccessPolicy::PermissiveAlgorithmAndFixtures
+    );
+    let real = "MIT License\nPermission is hereby granted, free of charge, to any person\n";
+    assert_eq!(classify_license_text(real), "MIT");
+    assert_eq!(classify_license_text("Apache-2.0 OR MIT"), "Apache-2.0");
+}
+
+#[cfg(unix)]
+#[test]
+fn license_scan_error_does_not_mint_a_certificate() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _guard) = temp_dir("scan-fail");
+    init_workspace(&root, "sealed", TargetLanguage::Rust).unwrap();
+    // Search permission stays so the manifest path can be opened. Read permission
+    // is removed so directory enumeration, and only that, fails.
+    let mut perms = fs::metadata(&root).unwrap().permissions();
+    perms.set_mode(0o111);
+    fs::set_permissions(&root, perms).unwrap();
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Ok(meta) = fs::metadata(&self.0) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+    let _restore = Restore(root.clone());
+
+    let err = CarnotMachine::from_workspace(&root).expect_err("unreadable tree must not certify");
+    assert!(
+        err.to_lowercase().contains("license scan"),
+        "expected a fail-closed scan error, got {err}"
     );
 }

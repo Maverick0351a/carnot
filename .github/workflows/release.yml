@@ -9,7 +9,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   binaries:
@@ -68,6 +68,8 @@ jobs:
     name: attach binaries
     needs: binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

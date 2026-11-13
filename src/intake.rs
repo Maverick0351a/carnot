@@ -105,8 +105,79 @@ pub fn spdx_from_license_field(field: &str) -> String {
     "UNKNOWN".to_string()
 }
 
+fn is_permissive_spdx(spdx: &str) -> bool {
+    matches!(
+        spdx,
+        "MIT" | "Apache-2.0" | "BSD-3-Clause" | "BSD-2-Clause" | "ISC"
+    )
+}
+
+/// A one-line SPDX expression (`MIT`, `Apache-2.0 OR MIT`), not prose that mentions a name.
+fn is_bare_spdx_expression(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') || trimmed.len() > 80 {
+        return false;
+    }
+    trimmed
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '+')
+        .filter(|part| !part.is_empty())
+        .all(|part| {
+            let upper = part.to_ascii_uppercase();
+            matches!(
+                upper.as_str(),
+                "MIT"
+                    | "APACHE"
+                    | "BSD"
+                    | "ISC"
+                    | "OR"
+                    | "AND"
+                    | "WITH"
+                    | "ONLY"
+                    | "LATER"
+                    | "GPL"
+                    | "AGPL"
+                    | "LGPL"
+                    | "MPL"
+                    | "BSL"
+                    | "SSPL"
+                    | "UNLICENSED"
+            ) || upper.chars().all(|c| c.is_ascii_digit())
+                || upper.starts_with("APACHE")
+                || upper.starts_with("BSD")
+                || upper.starts_with("GPL")
+                || upper.starts_with("AGPL")
+                || upper.starts_with("LGPL")
+                || upper.starts_with("MPL")
+        })
+}
+
+fn permissive_grant_present(text: &str, spdx: &str) -> bool {
+    let upper = text.to_ascii_uppercase();
+    match spdx {
+        "MIT" => upper.contains("PERMISSION IS HEREBY GRANTED"),
+        "Apache-2.0" => upper.contains("APACHE LICENSE") && upper.contains("2.0"),
+        "BSD-3-Clause" | "BSD-2-Clause" => {
+            upper.contains("REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS")
+        }
+        "ISC" => upper.contains("PERMISSION TO USE, COPY, MODIFY"),
+        _ => false,
+    }
+}
+
 pub fn classify_license_text(text: &str) -> String {
     let classified = spdx_from_license_field(text);
+    // A long notice that only mentions a permissive name, without the grant
+    // phrase, is not that license. Restrictive ids are unchanged.
+    if is_permissive_spdx(&classified)
+        && !permissive_grant_present(text, &classified)
+        && !is_bare_spdx_expression(text)
+    {
+        let upper = text.to_ascii_uppercase();
+        if upper.contains("ALL RIGHTS RESERVED") {
+            return "PROPRIETARY-EULA".to_string();
+        }
+        return "UNKNOWN".to_string();
+    }
     if classified != "UNKNOWN" {
         return classified;
     }

@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct TempDirGuard(PathBuf);
 
@@ -96,19 +97,26 @@ fn materialize_toy_cli_git() -> (PathBuf, TempDirGuard) {
         fixture.display()
     );
 
+    static TOY_SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = TOY_SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("carnot-toy-cli-{}-{}", std::process::id(), nanos));
+    let root = std::env::temp_dir().join(format!(
+        "carnot-toy-cli-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        seq
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create temp root");
     let guard = TempDirGuard(root.clone());
 
     copy_dir_filtered(&fixture, &root);
 
-    run_git(&root, &["init"]);
+    // Empty template skips sample-hook copies that race under parallel `git init` on macOS.
+    run_git(&root, &["init", "--template="]);
     run_git(&root, &["config", "core.autocrlf", "false"]);
     run_git(&root, &["config", "user.name", "Carnot Experiment"]);
     run_git(&root, &["config", "user.email", "experiment@carnot.local"]);

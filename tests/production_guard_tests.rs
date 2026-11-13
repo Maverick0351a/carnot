@@ -12,6 +12,7 @@ use carnot::workspace::{init_workspace, WorkspaceLayout};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct TempDirGuard(PathBuf);
 impl Drop for TempDirGuard {
@@ -21,14 +22,17 @@ impl Drop for TempDirGuard {
 }
 
 fn temp_dir(label: &str) -> (PathBuf, TempDirGuard) {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
-        "carnot-guard-{}-{}-{}",
+        "carnot-guard-{}-{}-{}-{}",
         label,
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .unwrap_or(0),
+        seq
     ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();

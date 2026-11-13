@@ -162,6 +162,17 @@ fn package_json_has_test_script(dir: &Path) -> bool {
         .is_some_and(|script| !script.trim().is_empty())
 }
 
+/// Deletes a cargo target directory when `run_test_runner` returns, including a failed spawn.
+struct CargoTargetGuard(Option<std::path::PathBuf>);
+
+impl Drop for CargoTargetGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
 pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> TestExecution {
     let command = runner.command_line();
     let mut cmd = Command::new(&runner.program);
@@ -169,9 +180,9 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
     if matches!(runner.kind, RunnerKind::Pytest | RunnerKind::Unittest) {
         cmd.env("PYTHONDONTWRITEBYTECODE", "1");
     }
-    // shortcut: a fresh temp target dir, removed after the run. Upgrade if verify should reuse a warm cargo cache.
+    // shortcut: a fresh temp target dir, removed on every return. Upgrade if verify should reuse a warm cargo cache.
     static CARGO_SEQ: AtomicU64 = AtomicU64::new(1);
-    let cargo_target = if runner.kind == RunnerKind::Cargo {
+    let _cargo_target = if runner.kind == RunnerKind::Cargo {
         let path = std::env::temp_dir().join(format!(
             "carnot-cargo-{}-{}",
             std::process::id(),
@@ -179,9 +190,9 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
         ));
         let _ = std::fs::create_dir_all(&path);
         cmd.env("CARGO_TARGET_DIR", &path);
-        Some(path)
+        CargoTargetGuard(Some(path))
     } else {
-        None
+        CargoTargetGuard(None)
     };
     let started_at = Instant::now();
     let out = crate::proc_util::run_command_bounded(
@@ -208,9 +219,6 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
         };
     }
     let (passed, failed) = parse_test_counts(runner.kind, &out.stdout, &out.stderr);
-    if let Some(path) = cargo_target {
-        let _ = std::fs::remove_dir_all(path);
-    }
     let note = if out.timed_out {
         Some(format!("timed out after {} ms", timeout_ms))
     } else if passed.is_none() && failed.is_none() {
@@ -624,5 +632,58 @@ mod tests {
 
         let (p, f) = parse_test_counts(RunnerKind::Go, "ok  \texample.com/t\t0.001s\n", "");
         assert_eq!((p, f), (None, None));
+    }
+
+    #[test]
+    fn cargo_target_dir_is_removed_when_the_runner_does_not_start() {
+        let dir = temp_dir("cargo-spawn-fail");
+        let prefix = format!("carnot-cargo-{}-", std::process::id());
+        let before = cargo_target_dirs(&prefix);
+        let runner = TestRunner {
+            kind: RunnerKind::Cargo,
+            program: dir.join("missing-runner").to_string_lossy().into_owned(),
+            args: vec!["test".to_string()],
+        };
+        let exec = run_test_runner(&dir, &runner, 1_000);
+        let after = cargo_target_dirs(&prefix);
+        let leaked: Vec<_> = after
+            .into_iter()
+            .filter(|path| !before.contains(path))
+            .collect();
+        let leaked_display = leaked
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        for path in &leaked {
+            let _ = fs::remove_dir_all(path);
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(!exec.started, "a missing program must not start");
+        assert!(exec.exit_code.is_none());
+        let note = exec.note.unwrap_or_default();
+        assert!(
+            note.contains("did not start"),
+            "note should explain the spawn failure: {note}"
+        );
+        assert!(
+            leaked.is_empty(),
+            "failed spawn left cargo target directories: {leaked_display}"
+        );
+    }
+
+    fn cargo_target_dirs(prefix: &str) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+            return found;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(prefix) {
+                found.push(entry.path());
+            }
+        }
+        found.sort();
+        found
     }
 }

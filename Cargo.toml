@@ -2,7 +2,7 @@
 name = "carnot"
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.88"
 description = "Clean-room license firewall, polyglot project emitter, and worktree organ evolver."
 readme = "README.md"
 license = "Apache-2.0 OR MIT"

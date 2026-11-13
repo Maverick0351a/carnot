@@ -415,14 +415,20 @@ fn scan_explicit_markers_recursive(
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_symlink() {
+            continue;
+        }
         if black_box_enforced
             && quarantined_prefixes
                 .iter()
-                .any(|qp| rel.starts_with(qp.trim_matches('/')))
+                .any(|qp| crate::intake::rel_matches_quarantine_prefix(&rel, qp))
         {
             continue;
         }
-        if path.is_dir() {
+        if ft.is_dir() {
             scan_explicit_markers_recursive(
                 root,
                 &path,
@@ -1164,6 +1170,9 @@ pub struct EvolutionRunReport {
     pub mean_island_diversity: f64,
     pub evolved_harness_preview: String,
     pub experience_cards: Vec<ExperienceCard>,
+    /// Seeded island tournament. Not a measured worktree trial.
+    #[serde(default)]
+    pub offline_demo: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub error_reflections: Vec<ExperienceCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1509,6 +1518,7 @@ pub fn run_island_evolution(
         mean_island_diversity,
         evolved_harness_preview,
         experience_cards,
+        offline_demo: true,
         error_reflections,
         operator_bandit: Some(bandit),
     }

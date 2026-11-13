@@ -28,7 +28,7 @@ Reviewers can inspect every claim directly against the source modules and `tests
 
 ## Install
 
-Rust 1.83 or newer. From a git checkout:
+Rust 1.88 or newer. From a git checkout:
 
 ```bash
 cargo install --path .

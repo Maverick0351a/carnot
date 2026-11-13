@@ -1727,6 +1727,21 @@ impl CarnotMachine {
         }
     }
 
+    fn first_working_program(candidates: &[&str]) -> String {
+        for candidate in candidates {
+            let ok = std::process::Command::new(candidate)
+                .arg("-c")
+                .arg("")
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false);
+            if ok {
+                return (*candidate).to_string();
+            }
+        }
+        candidates.first().copied().unwrap_or("python3").to_string()
+    }
+
     /// `organ.py` is a toy_cli / single-file convention — never map an unrelated organ_id to it.
     fn organ_py_applies_to(&self, organ_id: &str, root: &Path) -> bool {
         if organ_id == "toy" {
@@ -1788,17 +1803,35 @@ impl CarnotMachine {
 
     fn live_eval_commands(root: &Path) -> (String, Vec<String>, String, Vec<String>) {
         if root.join("solve_bench.py").is_file() {
-            (
-                "python".to_string(),
-                vec![
-                    "-m".to_string(),
-                    "pytest".to_string(),
-                    "test_organ.py".to_string(),
-                    "-q".to_string(),
-                ],
-                "python".to_string(),
-                vec!["solve_bench.py".to_string()],
-            )
+            let py = Self::first_working_program(&["python3", "python"]);
+            // toy_cli keeps pytest + test_organ.py. Generated projects ship
+            // `python3 -m unittest discover -s tests` and have no test_organ.py.
+            if root.join("test_organ.py").is_file() {
+                (
+                    py.clone(),
+                    vec![
+                        "-m".to_string(),
+                        "pytest".to_string(),
+                        "test_organ.py".to_string(),
+                        "-q".to_string(),
+                    ],
+                    py,
+                    vec!["solve_bench.py".to_string()],
+                )
+            } else {
+                (
+                    py.clone(),
+                    vec![
+                        "-m".to_string(),
+                        "unittest".to_string(),
+                        "discover".to_string(),
+                        "-s".to_string(),
+                        "tests".to_string(),
+                    ],
+                    py,
+                    vec!["solve_bench.py".to_string()],
+                )
+            }
         } else if root.join("Cargo.toml").is_file() {
             (
                 "cargo".to_string(),
@@ -1812,10 +1845,17 @@ impl CarnotMachine {
                 ],
             )
         } else {
+            let py = Self::first_working_program(&["python3", "python"]);
             (
-                "python".to_string(),
-                vec!["-m".to_string(), "pytest".to_string(), "-q".to_string()],
-                "python".to_string(),
+                py.clone(),
+                vec![
+                    "-m".to_string(),
+                    "unittest".to_string(),
+                    "discover".to_string(),
+                    "-s".to_string(),
+                    "tests".to_string(),
+                ],
+                py,
                 vec!["solve_bench.py".to_string()],
             )
         }
@@ -2181,6 +2221,7 @@ impl CarnotMachine {
             mean_island_diversity: 0.0,
             evolved_harness_preview: String::new(),
             experience_cards,
+            offline_demo: false,
             error_reflections: Vec::new(),
             operator_bandit: None,
         })

@@ -445,6 +445,7 @@ const JSON_OK_PROBE: &str = "import json,sys; sys.stdout.buffer.write(b'boot_log
 const JSON_BAD_PROBE: &str = "import json,sys; sys.stdout.buffer.write(json.dumps({'objective': 2.635983, 'validity': 0.0}).encode()); sys.stdout.buffer.write(b'\\r\\n')";
 
 fn json_probe_interpreter() -> &'static str {
+    let mut attempts = Vec::new();
     for candidate in ["python", "python3"] {
         let mut cmd = std::process::Command::new(candidate);
         cmd.arg("--version");
@@ -452,8 +453,12 @@ fn json_probe_interpreter() -> &'static str {
         if out.spawned && out.success && !out.timed_out {
             return candidate;
         }
+        attempts.push(format!("{candidate}: {out:?}"));
     }
-    panic!("python interpreter not found; put python or python3 on PATH");
+    panic!(
+        "python interpreter not found; put python or python3 on PATH. attempts: {}",
+        attempts.join(" | ")
+    );
 }
 
 #[test]
@@ -475,30 +480,28 @@ fn scoped_evolve_blocks_island_ring_and_subprocess_json_verifier() {
     // Independent subprocess last-line JSON evaluator.
     //
     // The old Windows probe was `powershell.exe -Command` with a 2s budget.
-    // On windows-latest that call returned success=false after about 2s, which
-    // is the wall-clock kill, and that host is a poor JSON probe anyway: it
-    // re-parses the raw command line and writes UTF-16 when stdout is a pipe.
-    // Gym benches already run under Python (argv + UTF-8) on both CI images.
-    // The script writes CRLF bytes itself so the line ending does not depend
-    // on the interpreter text mode. No per-platform skip: the same probe runs
-    // everywhere Python is on PATH.
+    // On windows-latest that call returned success=false after about 2s and
+    // the assertion fired before a JSON line was checked. That lines up with
+    // the wall-clock kill. The host is also a poor stand-in for the gym: it
+    // re-parses the raw command line, and a redirected pipe can capture UTF-16
+    // instead of the UTF-8 text this verifier decodes. This run did not capture
+    // that encoding; it is a reason not to keep the probe. Gym benches already
+    // run under Python on both CI images. The script writes CRLF bytes itself.
+    // The same probe runs on every OS; there is no platform skip.
     let python = json_probe_interpreter();
     let ok_eval = evaluate_json_command_with_timeout(python, &["-c", JSON_OK_PROBE], 10_000);
     assert!(ok_eval.success, "last-line JSON probe failed: {ok_eval:?}");
     assert!((ok_eval.raw_objective - 2.635983).abs() < 1e-6);
+    assert!((ok_eval.validity - 1.0).abs() < 1e-9);
 
     let rejected_eval = evaluate_json_command_with_timeout(python, &["-c", JSON_BAD_PROBE], 10_000);
     assert!(
         !rejected_eval.success,
         "validity <= 0 must be rejected: {rejected_eval:?}"
     );
-    assert!(
-        rejected_eval
-            .error_message
-            .as_deref()
-            .unwrap_or("")
-            .contains("validity"),
-        "expected a validity rejection, got {rejected_eval:?}"
+    assert_eq!(
+        rejected_eval.error_message.as_deref(),
+        Some("Candidate rejected: non-finite objective or validity <= 0.0")
     );
 
     // Pro tier gate + 3-island ring evolution + SHA-256 Experience Cards

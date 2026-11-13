@@ -2,9 +2,13 @@
 name = "carnot"
 version = "0.5.0"
 edition = "2021"
-description = "Carnot: Clean-room software deconstruction, polyglot synthesis, Pareto conformance verification, and sub-millisecond strangler-fig canary cutover engine."
+rust-version = "1.83"
+description = "Clean-room license firewall, polyglot project emitter, and worktree organ evolver."
+readme = "README.md"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Maverick0351a/carnot"
+keywords = ["clean-room", "license", "codegen", "cli", "worktree"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

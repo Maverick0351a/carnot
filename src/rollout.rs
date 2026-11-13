@@ -1470,7 +1470,7 @@ pub mod re2_lite {
         pos: usize,
     }
 
-    impl<'a> Parser<'a> {
+    impl Parser<'_> {
         fn peek(&self) -> Option<char> {
             self.chars.get(self.pos).copied()
         }

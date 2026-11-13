@@ -11,6 +11,8 @@ python3 scripts/check_studied_names.py
 
 On Windows, `python` is the usual interpreter name. `cargo test` includes the studied-name checker tests.
 
+CI runs those checks on Linux, macOS, and Windows. Pushing a `v*` tag builds release binaries. It does not publish the crate.
+
 ## Studied-name check
 
 Tracked files (source, comments, tests, docs, and commit-tracked config) must not name upstream projects this repository studies. Describe the capability instead (for example, "a feature-flag service" or "an evolutionary algorithm-design framework").

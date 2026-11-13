@@ -86,9 +86,8 @@ pub struct TrialLeaseGuard {
     budget: *mut TrialBudgetState,
 }
 
-// Safety: TrialLeaseGuard is only used within a single-threaded tick / test
-// context that owns the TrialBudgetState for the guard's lifetime.
-unsafe impl Send for TrialLeaseGuard {}
+// `TrialLeaseGuard` stays `!Send`. The raw pointer aliases caller-owned
+// `TrialBudgetState` and is only dereferenced on the thread that acquired it.
 
 impl Drop for TrialLeaseGuard {
     fn drop(&mut self) {

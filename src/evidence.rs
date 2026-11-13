@@ -365,10 +365,14 @@ pub fn sha256_hex(data: &[u8]) -> String {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in padded.as_chunks::<64>().0 {
+    // chunks_exact matches the padded block size on toolchains where
+    // `slice::as_chunks` is not yet stable.
+    for chunk in padded.chunks_exact(64) {
         let mut w = [0u32; 64];
-        for (slot, word_bytes) in w.iter_mut().take(16).zip(chunk.as_chunks::<4>().0) {
-            *slot = u32::from_be_bytes(*word_bytes);
+        for (slot, word_bytes) in w.iter_mut().take(16).zip(chunk.chunks_exact(4)) {
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(word_bytes);
+            *slot = u32::from_be_bytes(buf);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

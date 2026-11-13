@@ -590,11 +590,11 @@ pub fn calibrate_judge(human_1_to_5: &[u8], judge_scores_1_to_5: &[f64]) -> Judg
     let mut obs_disagreement = 0.0f64;
     let mut exp_disagreement = 0.0f64;
     let nf = n as f64;
-    for r in 0..5 {
-        for c in 0..5 {
+    for (r, hist_h_r) in hist_h.iter().enumerate() {
+        for (c, hist_j_c) in hist_j.iter().enumerate() {
             let w = ((r as f64 - c as f64).powi(2)) / 16.0;
             obs_disagreement += w * (conf[r][c] as f64 / nf);
-            exp_disagreement += w * ((hist_h[r] as f64 / nf) * (hist_j[c] as f64 / nf));
+            exp_disagreement += w * ((*hist_h_r as f64 / nf) * (*hist_j_c as f64 / nf));
         }
     }
     let kappa = if exp_disagreement <= 1e-12 {

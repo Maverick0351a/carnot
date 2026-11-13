@@ -46,7 +46,7 @@ use crate::scout::{
     RankedScoutCandidate, RuntimeShape, TargetLanguage,
 };
 use crate::tier::{AccountTier, ProFeature};
-use crate::workspace::sanitize_workspace_rel_path;
+use crate::workspace::{resolve_contained_path, sanitize_workspace_rel_path};
 use crate::worktree::{
     run_git_worktree_trial_secured, CandidateSource, WorktreeSecurityOptions, WorktreeTrialRequest,
     WorktreeTrialResult,
@@ -510,65 +510,23 @@ impl CarnotMachine {
         machine.preferences = manifest.preferences.clone();
         machine.manifest = manifest;
         machine.organ_flags.clear();
-        let mut organ_ids = Vec::with_capacity(machine.manifest.organs.len());
         for org in &machine.manifest.organs {
             machine.organ_flags.insert(org.id.clone(), true);
-            organ_ids.push(org.id.clone());
         }
         if let Some(first_org) = machine.manifest.organs.first() {
             machine.shell.selected_organ_id = first_org.id.clone();
         }
 
-        let layout = crate::workspace::WorkspaceLayout::at(dir);
+        machine.bind_disk_state(dir)?;
 
-        if let Ok(receipts) = crate::workspace::read_jsonl_typed::<crate::evidence::EvidenceReceipt>(
-            &layout.ledger_jsonl,
-        ) {
-            if !receipts.is_empty() {
-                machine.evidence.hydrate_from_receipts(receipts);
-            }
-        }
-
-        if let Ok(cards) =
-            crate::workspace::read_jsonl_typed::<ExperienceCard>(&layout.experience_cards_jsonl)
-        {
-            if !cards.is_empty() {
-                machine.experience_cards = cards;
-            }
-        }
-
-        machine.hydrate_proposals_from_disk(&layout);
-
-        if let Ok(saved_cases) =
-            crate::workspace::read_jsonl_typed::<DatasetCase>(&layout.dataset_jsonl)
-        {
-            if !saved_cases.is_empty() {
-                machine.dataset = saved_cases;
-            }
-        }
-
-        if layout.obligations_json.is_file() {
-            if let Ok(raw_ob) = std::fs::read_to_string(&layout.obligations_json) {
-                if let Ok(parsed_ob) =
-                    serde_json::from_str::<crate::obligations::ObligationLedger>(&raw_ob)
-                {
-                    machine.obligations = parsed_ob;
-                }
-            }
-        } else {
-            machine.obligations =
-                crate::obligations::ObligationLedger::seeded_for_organs(&organ_ids);
-        }
-
-        if let Ok(zones) = scan_directory_spdx_zones(dir) {
-            machine.clean_room_cert = build_clean_room_certificate_full(
-                zones,
-                Vec::new(),
-                machine.manifest.black_box_enforced,
-                machine.checkpoint_id.clone(),
-                &mut machine.evidence,
-            );
-        }
+        let zones = scan_directory_spdx_zones(dir).unwrap_or_default();
+        machine.clean_room_cert = build_clean_room_certificate_full(
+            zones,
+            Vec::new(),
+            machine.manifest.black_box_enforced,
+            machine.checkpoint_id.clone(),
+            &mut machine.evidence,
+        );
 
         for pb in load_workspace_playbooks(dir) {
             if !machine.playbooks.iter().any(|p| p.id == pb.id) {
@@ -576,6 +534,7 @@ impl CarnotMachine {
             }
         }
 
+        let layout = crate::workspace::WorkspaceLayout::at(dir);
         if let Ok(reg_rows) = crate::workspace::read_jsonl(&layout.regressions_jsonl) {
             machine.regressions_captured = reg_rows.len();
             for (idx, row) in reg_rows.iter().enumerate() {
@@ -607,6 +566,101 @@ impl CarnotMachine {
         Ok(machine)
     }
 
+    /// Replace in-memory demo fixtures with the workspace files on disk.
+    ///
+    /// `new_seeded` carries fictional proposals, golden rows, scout targets, and
+    /// evidence. Binding a real directory must not flush those into `.carnot/`.
+    /// An unreadable ledger, dataset, or proposals file is an error so a later
+    /// flush cannot overwrite it with an empty or seeded replacement.
+    fn bind_disk_state(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        let layout = crate::workspace::WorkspaceLayout::at(dir);
+
+        self.evidence = crate::evidence::EvidenceLedger::new();
+        if layout.ledger_jsonl.is_file() {
+            let receipts = crate::workspace::read_jsonl_typed::<crate::evidence::EvidenceReceipt>(
+                &layout.ledger_jsonl,
+            )
+            .map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; ledger '{}' is unreadable: {}",
+                    layout.ledger_jsonl.display(),
+                    e
+                )
+            })?;
+            self.evidence.hydrate_from_receipts(receipts);
+        }
+
+        if layout.dataset_jsonl.is_file() {
+            self.dataset = crate::workspace::read_jsonl_typed::<DatasetCase>(&layout.dataset_jsonl)
+                .map_err(|e| {
+                    format!(
+                        "Refusing to bind workspace; dataset '{}' is unreadable: {}",
+                        layout.dataset_jsonl.display(),
+                        e
+                    )
+                })?;
+        } else {
+            self.dataset.clear();
+        }
+
+        if layout.experience_cards_jsonl.is_file() {
+            self.experience_cards = crate::workspace::read_jsonl_typed::<ExperienceCard>(
+                &layout.experience_cards_jsonl,
+            )
+            .map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; experience cards '{}' are unreadable: {}",
+                    layout.experience_cards_jsonl.display(),
+                    e
+                )
+            })?;
+        } else {
+            self.experience_cards.clear();
+        }
+
+        self.shell.proposals.clear();
+        if layout.proposals_json.is_file() {
+            let raw = std::fs::read_to_string(&layout.proposals_json).map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; proposals '{}' are unreadable: {}",
+                    layout.proposals_json.display(),
+                    e
+                )
+            })?;
+            self.shell.proposals = serde_json::from_str(&raw).map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; proposals '{}' are invalid JSON: {}",
+                    layout.proposals_json.display(),
+                    e
+                )
+            })?;
+        }
+
+        self.scout_candidates.clear();
+        self.latest_scout_ranking.clear();
+
+        let organ_ids: Vec<String> = self.manifest.organs.iter().map(|o| o.id.clone()).collect();
+        if layout.obligations_json.is_file() {
+            let raw = std::fs::read_to_string(&layout.obligations_json).map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; obligations '{}' are unreadable: {}",
+                    layout.obligations_json.display(),
+                    e
+                )
+            })?;
+            self.obligations = serde_json::from_str(&raw).map_err(|e| {
+                format!(
+                    "Refusing to bind workspace; obligations '{}' are invalid JSON: {}",
+                    layout.obligations_json.display(),
+                    e
+                )
+            })?;
+        } else {
+            self.obligations = crate::obligations::ObligationLedger::seeded_for_organs(&organ_ids);
+        }
+        Ok(())
+    }
+
     /// Flushes durable state (`carnot.manifest.json`, `Carnot.toml`, `.carnot/dataset.jsonl`,
     /// `.carnot/experience_cards.jsonl`, `.carnot/proposals.json`, `.carnot/obligations.json`,
     /// and `.carnot/ledger.jsonl`) whenever this `CarnotMachine` is bound to a disk `workspace_root`.
@@ -631,19 +685,6 @@ impl CarnotMachine {
         }
         if let Ok(prop_json) = serde_json::to_string_pretty(&self.shell.proposals) {
             let _ = std::fs::write(&layout.proposals_json, prop_json);
-        }
-    }
-
-    /// Reload ProposalCards from `.carnot/proposals.json` when present (enables cross-process Accept).
-    fn hydrate_proposals_from_disk(&mut self, layout: &crate::workspace::WorkspaceLayout) {
-        if !layout.proposals_json.is_file() {
-            return;
-        }
-        let Ok(raw) = std::fs::read_to_string(&layout.proposals_json) else {
-            return;
-        };
-        if let Ok(cards) = serde_json::from_str::<Vec<ProposalCard>>(&raw) {
-            self.shell.proposals = cards;
         }
     }
 
@@ -1575,16 +1616,15 @@ impl CarnotMachine {
 
         let layout = crate::workspace::WorkspaceLayout::at(&target.root);
         if layout.manifest_json.is_file() {
-            if let Ok(manifest) = crate::workspace::load_manifest_from_workspace(&target.root) {
-                self.manifest = manifest;
-                self.preferences = self.manifest.preferences.clone();
-                self.organ_flags.clear();
-                for org in &self.manifest.organs {
-                    self.organ_flags.insert(org.id.clone(), true);
-                }
-                if let Some(first) = self.manifest.organs.first() {
-                    self.shell.selected_organ_id = first.id.clone();
-                }
+            let manifest = crate::workspace::load_manifest_from_workspace(&target.root)?;
+            self.manifest = manifest;
+            self.preferences = self.manifest.preferences.clone();
+            self.organ_flags.clear();
+            for org in &self.manifest.organs {
+                self.organ_flags.insert(org.id.clone(), true);
+            }
+            if let Some(first) = self.manifest.organs.first() {
+                self.shell.selected_organ_id = first.id.clone();
             }
         } else {
             // Bare workspace (e.g. toy_cli): do not keep seeded leftover organs/selection.
@@ -1595,7 +1635,15 @@ impl CarnotMachine {
         std::fs::create_dir_all(&gym_dir)
             .map_err(|e| format!("Failed to create gym dir '{}': {}", gym_dir.display(), e))?;
 
-        self.hydrate_proposals_from_disk(&layout);
+        self.bind_disk_state(&target.root)?;
+        let zones = scan_directory_spdx_zones(&target.root).unwrap_or_default();
+        self.clean_room_cert = build_clean_room_certificate_full(
+            zones,
+            Vec::new(),
+            self.manifest.black_box_enforced,
+            self.checkpoint_id.clone(),
+            &mut self.evidence,
+        );
 
         self.flush_workspace_state();
         self.log_event(
@@ -2139,7 +2187,7 @@ impl CarnotMachine {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!(".carnot/staged/{}", trial_id));
         let staged_rel = sanitize_workspace_rel_path(&root, &staged_rel_raw)?;
-        let staged_root = root.join(&staged_rel);
+        let staged_root = resolve_contained_path(&root, &staged_rel)?;
         if !staged_root.is_dir() {
             return Err(format!(
                 "Staged trial dir missing: {}",
@@ -2156,6 +2204,11 @@ impl CarnotMachine {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "staged meta missing organ_rel_path".to_string())?;
         let organ_rel_path = sanitize_workspace_rel_path(&root, organ_rel_raw)?;
+        let primary = resolve_contained_path(&root, &organ_rel_path)?;
+        let staged_file = resolve_contained_path(
+            &root,
+            &format!("{}/{}", staged_rel.trim_end_matches('/'), organ_rel_path),
+        )?;
         let organ_id = meta
             .get("organ_id")
             .and_then(|v| v.as_str())
@@ -2175,10 +2228,10 @@ impl CarnotMachine {
             .unwrap_or("")
             .to_string();
 
-        let staged_file = staged_root.join(&organ_rel_path);
-        let primary = root.join(&organ_rel_path);
         if let Some(parent) = primary.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!("Failed to create parent for '{}': {}", primary.display(), e)
+            })?;
         }
         std::fs::copy(&staged_file, &primary).map_err(|e| {
             format!(
@@ -2609,15 +2662,15 @@ impl CarnotMachine {
                 } = &action
                 {
                     if let Some(ref root) = self.workspace_root {
-                        match sanitize_workspace_rel_path(root, staged_rel_dir) {
-                            Ok(staged_rel) => {
-                                let staged = root.join(&staged_rel);
+                        match resolve_contained_path(root, staged_rel_dir) {
+                            Ok(staged) => {
                                 let _ = std::fs::remove_dir_all(&staged);
                                 self.log_event(
                                     "STAGED_TRIAL_DISCARDED",
                                     format!(
                                         "Declined staged trial '{}'; removed {}.",
-                                        trial_id, staged_rel
+                                        trial_id,
+                                        staged.display()
                                     ),
                                     None,
                                 );
@@ -2653,6 +2706,7 @@ impl CarnotMachine {
                             "Undo PromoteStagedOrgan requires workspace_root".to_string()
                         })?;
                         let organ_rel = sanitize_workspace_rel_path(&root, organ_rel_path)?;
+                        let primary = resolve_contained_path(&root, &organ_rel)?;
                         let bytes = snapshot
                             .as_ref()
                             .and_then(|s| s.get("organ_bytes_utf8"))
@@ -2661,9 +2715,14 @@ impl CarnotMachine {
                                 "PromoteStagedOrgan undo snapshot missing organ_bytes_utf8"
                                     .to_string()
                             })?;
-                        let primary = root.join(&organ_rel);
                         if let Some(parent) = primary.parent() {
-                            std::fs::create_dir_all(parent).ok();
+                            std::fs::create_dir_all(parent).map_err(|e| {
+                                format!(
+                                    "Failed to create parent for '{}': {}",
+                                    primary.display(),
+                                    e
+                                )
+                            })?;
                         }
                         std::fs::write(&primary, bytes)
                             .map_err(|e| format!("Failed to restore organ bytes on undo: {}", e))?;

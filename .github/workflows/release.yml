@@ -1,0 +1,80 @@
+# Builds release binaries when a version tag is pushed.
+# Does not publish to crates.io. Pushing the tag is a manual owner step.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Stage binary and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p dist
+          if [[ -f target/release/carnot.exe ]]; then
+            src=target/release/carnot.exe
+            ext=".exe"
+          else
+            src=target/release/carnot
+            ext=""
+          fi
+          name="carnot-${host}${ext}"
+          cp "$src" "dist/${name}"
+          (
+            cd dist
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$name" > "${name}.sha256"
+            elif command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 "$name" > "${name}.sha256"
+            elif command -v openssl >/dev/null 2>&1; then
+              digest=$(openssl dgst -sha256 "$name" | awk '{print $NF}')
+              printf '%s  %s\n' "$digest" "$name" > "${name}.sha256"
+            else
+              echo "no sha256 tool on PATH" >&2
+              exit 1
+            fi
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carnot-${{ matrix.os }}
+          path: dist/*
+
+  github-release:
+    name: attach binaries
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

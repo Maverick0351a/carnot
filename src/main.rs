@@ -1,7 +1,7 @@
 use carnot::bridge::{CarnotMachine, EvolveOpts, DEFAULT_CUTOVER_FLAG};
 use carnot::eval::DatasetSplit;
 use carnot::proxy::{run_reverse_proxy, ProxyConfig};
-use carnot::scout::{inspect_local_directory_metrics, TargetLanguage};
+use carnot::scout::{ScoutCommandReport, TargetLanguage};
 use carnot::workspace::{
     init_workspace, load_manifest_from_workspace, materialize_project_to_disk, WorkspaceLayout,
 };
@@ -62,13 +62,13 @@ Usage:
   carnot app [host:port] [ws]
   carnot serve [host:port] [ws]
   carnot demo
-  carnot scout [dir] [lang]
+  carnot scout [--demo] [dir] [lang]
   carnot build-plan [lang]
-  carnot point <dir>
+  carnot point <dir> [--in-tree]
   carnot daemon [--once | --ticks N] [ws]
-  carnot evolve [organ] [gens] [--demo] [--apply]
+  carnot evolve [organ] [gens] [--demo] [--apply] [--candidate <file>]
   carnot proposal <accept|decline|undo> <proposal_id> [ws]
-  carnot verify
+  carnot verify [--demo] [dir]
   carnot mcp [ws]
   carnot black-box <on|off|status> [ws]
   carnot search <query> [dir] [top_k]
@@ -78,8 +78,10 @@ Usage:
   carnot obligations [ws]
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
-`carnot generate` writes into a directory created by `carnot init`.
-Live evolve needs an explicit candidate. The CLI does not accept one; `carnot daemon` reports a skip until a candidate is supplied through MCP (`carnot_daemon_tick`).
+`carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names.
+`carnot scout` and `carnot verify` score the directory you pass (or `.`). `--demo` is the seeded set and is labeled in the output.
+`carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`.
+Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
 ",
         version = env!("CARGO_PKG_VERSION")
@@ -99,15 +101,22 @@ fn load_or_seed_machine(workspace_arg: Option<&str>) -> CarnotMachine {
     }
 }
 
+fn saved_state_for(dir: &Path) -> bool {
+    carnot::workspace::workspace_has_in_tree_state(dir)
+        || carnot::workspace::external_point_state_dir(dir)
+            .join("carnot.manifest.json")
+            .is_file()
+}
+
 fn try_load_machine(workspace_arg: Option<&str>) -> Result<CarnotMachine, String> {
     if let Some(ws) = workspace_arg {
         let p = Path::new(ws);
-        if p.join("carnot.manifest.json").is_file() {
+        if saved_state_for(p) {
             return CarnotMachine::from_workspace(p);
         }
         return Ok(CarnotMachine::new_seeded());
     }
-    if Path::new("carnot.manifest.json").is_file() {
+    if saved_state_for(Path::new(".")) {
         return CarnotMachine::from_workspace(Path::new("."));
     }
     Ok(CarnotMachine::new_seeded())
@@ -190,7 +199,17 @@ fn main() {
         "generate" => {
             let dir_str = args.get(2).map(|s| s.as_str()).unwrap_or("./generated-app");
             let target_dir = Path::new(dir_str);
-            let lang = args.get(3).map(|s| TargetLanguage::from_str_loose(s));
+            let lang = if let Some(raw) = args.get(3) {
+                match TargetLanguage::parse_known(raw) {
+                    Ok(lang) => Some(lang),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                None
+            };
             if !target_dir.join("carnot.manifest.json").is_file() {
                 eprintln!(
                     "No carnot.manifest.json in '{}'. Run `carnot init {} <name> [lang]` first.",
@@ -276,25 +295,47 @@ fn main() {
             }
         }
         "scout" => {
-            let mut machine = load_or_seed_machine(None);
-            if let Some(dir_arg) = args.get(2) {
-                let p = Path::new(dir_arg);
-                if p.exists() {
-                    if let Ok(local_metrics) = inspect_local_directory_metrics(
-                        p,
-                        "local-inspected-target",
-                        "Local Directory",
-                    ) {
-                        machine.scout_candidates.insert(0, local_metrics);
+            let mut demo = false;
+            let mut positionals: Vec<&str> = Vec::new();
+            for arg in args.iter().skip(2) {
+                match arg.as_str() {
+                    "--demo" => demo = true,
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown scout flag '{other}'");
+                        std::process::exit(2);
                     }
+                    other => positionals.push(other),
                 }
             }
-            let lang = args.get(3).map(|s| TargetLanguage::from_str_loose(s));
-            match machine.run_scout(lang) {
-                Ok(ranked) => print_json(&ranked),
-                Err(e) => {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
+            if demo {
+                let mut machine = CarnotMachine::new_seeded();
+                let lang = positionals
+                    .first()
+                    .map(|s| TargetLanguage::from_str_loose(s));
+                match machine.run_scout(lang) {
+                    Ok(ranked) => {
+                        eprintln!(
+                            "offline demo (seeded candidates); not a score of the pointed workspace"
+                        );
+                        print_json(&ScoutCommandReport { demo: true, ranked });
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let dir = positionals.first().copied().unwrap_or(".");
+                let lang = positionals
+                    .get(1)
+                    .map(|s| TargetLanguage::from_str_loose(s));
+                let mut machine = CarnotMachine::new_seeded();
+                match machine.scout_pointed(Path::new(dir), lang) {
+                    Ok(report) => print_json(&report),
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -305,14 +346,55 @@ fn main() {
             print_json(&plan);
         }
         "verify" => {
-            let mut machine = load_or_seed_machine(None);
-            let summaries = machine.run_evaluations(DatasetSplit::Golden);
-            print_json(&summaries);
+            let mut demo = false;
+            let mut dir: Option<&str> = None;
+            for arg in args.iter().skip(2) {
+                match arg.as_str() {
+                    "--demo" => demo = true,
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown verify flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => dir = Some(other),
+                }
+            }
+            if demo {
+                let mut machine = CarnotMachine::new_seeded();
+                let summaries = machine.run_evaluations(DatasetSplit::Golden);
+                eprintln!("offline demo (seeded golden set); not a score of the pointed workspace");
+                print_json(&carnot::bridge::VerifyCommandReport {
+                    demo: true,
+                    workspace: None,
+                    summaries,
+                });
+            } else {
+                let dir = dir.unwrap_or(".");
+                let mut machine = CarnotMachine::new_seeded();
+                match machine.verify_pointed(Path::new(dir)) {
+                    Ok(report) => print_json(&report),
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
         }
         "point" => {
-            let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let mut in_tree = false;
+            let mut dir: Option<&str> = None;
+            for arg in args.iter().skip(2) {
+                match arg.as_str() {
+                    "--in-tree" => in_tree = true,
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown point flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => dir = Some(other),
+                }
+            }
+            let dir = dir.unwrap_or(".");
             let mut machine = load_or_seed_machine(Some(dir));
-            match machine.point_target(Path::new(dir)) {
+            match machine.point_target_with(Path::new(dir), in_tree) {
                 Ok(target) => print_json(&target),
                 Err(e) => {
                     eprintln!("{}", e);
@@ -383,27 +465,57 @@ fn main() {
         "evolve" => {
             let mut demo = false;
             let mut apply = false;
+            let mut candidate_path: Option<String> = None;
             let mut positionals: Vec<&str> = Vec::new();
-            for a in args.iter().skip(2) {
-                match a.as_str() {
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
                     "--demo" => demo = true,
                     "--apply" => apply = true,
+                    "--candidate" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot evolve [organ] [gens] --candidate <file>");
+                            std::process::exit(2);
+                        };
+                        candidate_path = Some(path.clone());
+                    }
+                    other if other.starts_with("--candidate=") => {
+                        let path = other.trim_start_matches("--candidate=");
+                        if path.is_empty() {
+                            eprintln!("Usage: carnot evolve [organ] [gens] --candidate <file>");
+                            std::process::exit(2);
+                        }
+                        candidate_path = Some(path.to_string());
+                    }
                     other if other.starts_with('-') => {
                         eprintln!("Unknown evolve flag '{}'", other);
                         std::process::exit(2);
                     }
                     other => positionals.push(other),
                 }
+                i += 1;
             }
             let organ_id = positionals.first().copied().map(|s| s.to_string());
             let gens = positionals.get(1).and_then(|s| s.parse::<usize>().ok());
+            let explicit_candidate = if let Some(path) = candidate_path {
+                match std::fs::read_to_string(&path) {
+                    Ok(body) => Some(body),
+                    Err(e) => {
+                        eprintln!("cannot read candidate '{path}': {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
             let mut machine = load_or_seed_machine(None);
             match machine.evolve_organ_with_opts(EvolveOpts {
                 organ_id,
                 generations: gens,
                 demo,
                 apply,
-                explicit_candidate: None,
+                explicit_candidate,
                 organ_rel_path: None,
             }) {
                 Ok(report) => {
@@ -559,7 +671,7 @@ fn main() {
 /// or the demo fixtures will be written into `dir`.
 fn machine_rooted_at(dir: &str) -> CarnotMachine {
     let p = Path::new(dir);
-    if p.join("carnot.manifest.json").is_file() {
+    if saved_state_for(p) {
         match CarnotMachine::from_workspace(p) {
             Ok(machine) => return machine,
             Err(e) => {

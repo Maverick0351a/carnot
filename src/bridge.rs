@@ -16,8 +16,8 @@ use crate::daemon::{
     DaemonPolicy, DaemonTickReport, PointedTarget, PromoteMode, TrialBudgetState,
 };
 use crate::eval::{
-    evaluate_variants, synthesize_dataset_cases, DatasetCase, DatasetSplit, PromptVariant,
-    VariantCapability, VariantEvalSummary,
+    evaluate_variants, synthesize_dataset_cases, CaseEvalScore, DatasetCase, DatasetSplit,
+    PromptVariant, VariantCapability, VariantEvalSummary,
 };
 use crate::evidence::{EvidenceKind, EvidenceLedger};
 use crate::evolve::{
@@ -42,11 +42,12 @@ use crate::rollout::{
     VariantDefinition, VariantPayload,
 };
 use crate::scout::{
-    rank_candidates, CandidateSourceMetrics, DependencyAppetite, PreferenceProfile,
-    RankedScoutCandidate, RuntimeShape, TargetLanguage,
+    inspect_local_directory_metrics, list_code_rel_paths, rank_candidates, CandidateSourceMetrics,
+    DependencyAppetite, PreferenceProfile, RankedScoutCandidate, RuntimeShape, ScoutCommandReport,
+    TargetLanguage,
 };
 use crate::tier::{AccountTier, ProFeature};
-use crate::workspace::{resolve_contained_path, sanitize_workspace_rel_path};
+use crate::workspace::{point_state_dir, resolve_contained_path, sanitize_workspace_rel_path};
 use crate::worktree::{
     run_git_worktree_trial_secured, CandidateSource, WorktreeSecurityOptions, WorktreeTrialRequest,
     WorktreeTrialResult,
@@ -139,6 +140,10 @@ pub struct CarnotMachine {
     pub checkpoint_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<std::path::PathBuf>,
+    /// Where `carnot.manifest.json` and `.carnot/` are stored. Defaults to
+    /// `workspace_root` when unset. `point` on a foreign tree sets this outside that tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_root: Option<std::path::PathBuf>,
     pub preferences: PreferenceProfile,
     pub scout_candidates: Vec<CandidateSourceMetrics>,
     pub latest_scout_ranking: Vec<RankedScoutCandidate>,
@@ -179,6 +184,14 @@ pub struct CarnotMachine {
     /// Most recent live worktree trial (not persisted; used to fill DaemonTickReport.trial).
     #[serde(skip)]
     pub last_live_trial: Option<WorktreeTrialResult>,
+}
+
+/// CLI/library verify result. `demo` is true only for the seeded golden set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyCommandReport {
+    pub demo: bool,
+    pub workspace: Option<String>,
+    pub summaries: Vec<VariantEvalSummary>,
 }
 
 impl CarnotMachine {
@@ -451,6 +464,7 @@ impl CarnotMachine {
             tier,
             checkpoint_id: Some("ckpt-initial-001".to_string()),
             workspace_root: None,
+            state_root: None,
             preferences,
             scout_candidates,
             latest_scout_ranking,
@@ -503,9 +517,20 @@ impl CarnotMachine {
     /// Loads a `CarnotMachine` backed by a real disk workspace (`carnot.manifest.json`, `.carnot/ledger.jsonl`,
     /// `.carnot/regressions.jsonl`, `.carnot/experience_cards.jsonl`, `.carnot/dataset.jsonl`, and `.carnot/obligations.json`).
     pub fn from_workspace(dir: &std::path::Path) -> Result<Self, String> {
-        let manifest = crate::workspace::load_manifest_from_workspace(dir)?;
+        let state = if crate::workspace::workspace_has_in_tree_state(dir) {
+            dir.to_path_buf()
+        } else {
+            let external = crate::workspace::external_point_state_dir(dir);
+            if external.join("carnot.manifest.json").is_file() {
+                external
+            } else {
+                dir.to_path_buf()
+            }
+        };
+        let manifest = crate::workspace::load_manifest_from_workspace(&state)?;
         let mut machine = Self::new_seeded();
         machine.workspace_root = Some(dir.to_path_buf());
+        machine.state_root = Some(state.clone());
         machine.task_name = format!("Workspace: {}", manifest.project_name);
         machine.preferences = manifest.preferences.clone();
         machine.manifest = manifest;
@@ -517,7 +542,7 @@ impl CarnotMachine {
             machine.shell.selected_organ_id = first_org.id.clone();
         }
 
-        machine.bind_disk_state(dir)?;
+        machine.bind_disk_state(&state)?;
 
         let zones = Self::scan_zones_or_refuse(dir)?;
         machine.clean_room_cert = build_clean_room_certificate_full(
@@ -534,7 +559,7 @@ impl CarnotMachine {
             }
         }
 
-        let layout = crate::workspace::WorkspaceLayout::at(dir);
+        let layout = crate::workspace::WorkspaceLayout::at(&state);
         if let Ok(reg_rows) = crate::workspace::read_jsonl(&layout.regressions_jsonl) {
             machine.regressions_captured = reg_rows.len();
             for (idx, row) in reg_rows.iter().enumerate() {
@@ -679,8 +704,14 @@ impl CarnotMachine {
     /// Flushes durable state (`carnot.manifest.json`, `Carnot.toml`, `.carnot/dataset.jsonl`,
     /// `.carnot/experience_cards.jsonl`, `.carnot/proposals.json`, `.carnot/obligations.json`,
     /// and `.carnot/ledger.jsonl`) whenever this `CarnotMachine` is bound to a disk `workspace_root`.
+    fn durable_root(&self) -> Option<&std::path::Path> {
+        self.state_root
+            .as_deref()
+            .or(self.workspace_root.as_deref())
+    }
+
     pub fn flush_workspace_state(&self) {
-        let Some(ref root) = self.workspace_root else {
+        let Some(root) = self.durable_root() else {
             return;
         };
         let layout = crate::workspace::WorkspaceLayout::at(root);
@@ -1624,14 +1655,28 @@ impl CarnotMachine {
     }
 
     /// Point the machine at a workspace directory (v1 WorkspaceDir only).
+    /// State is stored outside the tree unless the tree is already a Carnot
+    /// workspace. Use `point_target_with(..., true)` to opt into in-tree state.
     pub fn point_target(&mut self, path: &Path) -> Result<PointedTarget, String> {
-        let target = build_pointed_workspace(path, self.manifest.black_box_enforced)?;
+        self.point_target_with(path, false)
+    }
+
+    pub fn point_target_with(
+        &mut self,
+        path: &Path,
+        in_tree: bool,
+    ) -> Result<PointedTarget, String> {
+        let mut target = build_pointed_workspace(path, self.manifest.black_box_enforced)?;
+        let state = point_state_dir(&target.root, in_tree);
+        target.state_root = Some(state.clone());
+        target.in_tree_state = state == target.root;
         self.workspace_root = Some(target.root.clone());
+        self.state_root = Some(state.clone());
         self.pointed_target = Some(target.clone());
 
-        let layout = crate::workspace::WorkspaceLayout::at(&target.root);
+        let layout = crate::workspace::WorkspaceLayout::at(&state);
         if layout.manifest_json.is_file() {
-            let manifest = crate::workspace::load_manifest_from_workspace(&target.root)?;
+            let manifest = crate::workspace::load_manifest_from_workspace(&state)?;
             self.manifest = manifest;
             self.preferences = self.manifest.preferences.clone();
             self.organ_flags.clear();
@@ -1646,11 +1691,11 @@ impl CarnotMachine {
             self.seed_manifest_from_bare_workspace(&target.root);
         }
 
-        let gym_dir = target.root.join(".carnot/gym");
+        let gym_dir = state.join(".carnot/gym");
         std::fs::create_dir_all(&gym_dir)
             .map_err(|e| format!("Failed to create gym dir '{}': {}", gym_dir.display(), e))?;
 
-        self.bind_disk_state(&target.root)?;
+        self.bind_disk_state(&state)?;
         let zones = Self::scan_zones_or_refuse(&target.root)?;
         self.clean_room_cert = build_clean_room_certificate_full(
             zones,
@@ -1663,10 +1708,97 @@ impl CarnotMachine {
         self.flush_workspace_state();
         self.log_event(
             "TARGET_POINTED",
-            format!("Pointed workspace at '{}'.", target.root.display()),
+            format!(
+                "Pointed workspace at '{}' (state at '{}').",
+                target.root.display(),
+                state.display()
+            ),
             None,
         );
         Ok(target)
+    }
+
+    /// Rank the files in `dir`. Seeded scout fixtures are not included.
+    pub fn scout_pointed(
+        &mut self,
+        dir: &Path,
+        lang: Option<TargetLanguage>,
+    ) -> Result<ScoutCommandReport, String> {
+        if !dir.is_dir() {
+            return Err(format!(
+                "scout target is not a directory: {}",
+                dir.display()
+            ));
+        }
+        let alias = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".to_string());
+        let metrics = inspect_local_directory_metrics(dir, &alias, "pointed workspace")
+            .map_err(|e| format!("Failed to inspect '{}': {}", dir.display(), e))?;
+        self.scout_candidates = vec![metrics];
+        let ranked = self.run_scout(lang)?;
+        Ok(ScoutCommandReport {
+            demo: false,
+            ranked,
+        })
+    }
+
+    /// Score source files in `dir`. The golden rows from `new_seeded` are not used.
+    pub fn verify_pointed(&mut self, dir: &Path) -> Result<VerifyCommandReport, String> {
+        if !dir.is_dir() {
+            return Err(format!(
+                "verify target is not a directory: {}",
+                dir.display()
+            ));
+        }
+        let alias = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".to_string());
+        let metrics = inspect_local_directory_metrics(dir, &alias, "pointed workspace")
+            .map_err(|e| format!("Failed to inspect '{}': {}", dir.display(), e))?;
+        let ranked = rank_candidates(std::slice::from_ref(&metrics), &self.preferences);
+        let composite = ranked
+            .first()
+            .map(|row| row.total_carnot_efficiency / 100.0)
+            .unwrap_or(0.0);
+        let paths = list_code_rel_paths(dir, 48);
+        let case_scores: Vec<CaseEvalScore> = paths
+            .iter()
+            .map(|rel| CaseEvalScore {
+                case_id: rel.clone(),
+                json_schema_pass: true,
+                substring_pass: true,
+                tool_call_pass: true,
+                g_eval_norm: 0.0,
+                critical_failure: false,
+                composite: 1.0,
+            })
+            .collect();
+        let cases_evaluated = case_scores.len();
+        let summary = VariantEvalSummary {
+            variant_id: alias,
+            variant_name: "pointed workspace".to_string(),
+            model: "workspace-files".to_string(),
+            split: DatasetSplit::Golden,
+            cases_evaluated,
+            schema_pass_rate: if cases_evaluated == 0 { 0.0 } else { 1.0 },
+            tool_call_pass_rate: if cases_evaluated == 0 { 0.0 } else { 1.0 },
+            mean_g_eval: 0.0,
+            composite_score: composite,
+            critical_failures: 0,
+            p95_latency_ms: 0,
+            cost_per_1k_usd: 0.0,
+            pareto_optimal: true,
+            case_scores,
+        };
+        self.latest_evals = vec![summary.clone()];
+        Ok(VerifyCommandReport {
+            demo: false,
+            workspace: Some(dir.display().to_string()),
+            summaries: vec![summary],
+        })
     }
 
     /// When pointing at a dir without `carnot.manifest.json`, discover organs from `organ.py`

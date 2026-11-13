@@ -32,9 +32,16 @@ pub enum TargetKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointedTarget {
     pub kind: TargetKind,
-    /// Workspace that owns `.carnot/`.
+    /// Code tree that was pointed at.
     pub root: PathBuf,
     pub black_box_enforced: bool,
+    /// Directory that holds `carnot.manifest.json` and `.carnot/`.
+    /// Equal to `root` for an existing workspace or `point --in-tree`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_root: Option<PathBuf>,
+    /// True when state is stored inside `root`.
+    #[serde(default)]
+    pub in_tree_state: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +199,8 @@ pub fn build_pointed_workspace(
         kind: TargetKind::WorkspaceDir,
         root: path.to_path_buf(),
         black_box_enforced,
+        state_root: None,
+        in_tree_state: false,
     })
 }
 

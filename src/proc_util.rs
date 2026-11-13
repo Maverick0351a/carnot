@@ -71,6 +71,12 @@ pub fn run_command_bounded(
     } else {
         cmd.stdin(Stdio::null());
     }
+    // Own process group so a timeout can signal the child and every grandchild.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -125,6 +131,7 @@ pub fn run_command_bounded(
             Ok(None) => {
                 if t0.elapsed() >= limit {
                     timed_out = true;
+                    kill_process_tree(child.id());
                     let _ = child.kill();
                     let _ = child.wait();
                     break;
@@ -133,6 +140,7 @@ pub fn run_command_bounded(
             }
             Err(e) => {
                 wait_err = Some(e.to_string());
+                kill_process_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
@@ -141,12 +149,10 @@ pub fn run_command_bounded(
     }
 
     let duration_ms = t0.elapsed().as_millis() as u64;
-    let (stdout, stdout_truncated) = out_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_else(|| (String::new(), false));
-    let (stderr, stderr_truncated) = err_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_else(|| (String::new(), false));
+    // shortcut: on timeout the reader join is capped at 2s and then detached. Upgrade to a cancellable read if a survivor keeps the pipe open past the group kill.
+    let join_cap = timed_out.then_some(Duration::from_millis(2_000));
+    let (stdout, stdout_truncated) = join_reader(out_handle, join_cap);
+    let (stderr, stderr_truncated) = join_reader(err_handle, join_cap);
 
     BoundedProcessOutput {
         spawned: true,
@@ -159,6 +165,52 @@ pub fn run_command_bounded(
         stdout_truncated,
         stderr_truncated,
         spawn_error: wait_err,
+    }
+}
+
+fn join_reader(
+    handle: Option<thread::JoinHandle<(String, bool)>>,
+    cap: Option<Duration>,
+) -> (String, bool) {
+    let Some(handle) = handle else {
+        return (String::new(), false);
+    };
+    let Some(limit) = cap else {
+        return handle.join().unwrap_or_else(|_| (String::new(), false));
+    };
+    let started = Instant::now();
+    loop {
+        if handle.is_finished() {
+            return handle.join().unwrap_or_else(|_| (String::new(), false));
+        }
+        if started.elapsed() >= limit {
+            drop(handle);
+            return (String::new(), false);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn kill_process_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        // Negative pid is the process group created by `process_group(0)`.
+        unsafe {
+            kill(-(pid as i32), 9);
+        }
+    }
+    // shortcut: Windows uses taskkill /T rather than a job object. Upgrade to a job object if a detached grandchild survives.
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 

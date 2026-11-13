@@ -38,6 +38,10 @@ fn launch_desktop_app_window(url: &str) {
     }
 }
 
+fn verify_process_failed(timed_out: bool, exit_code: Option<i32>, failed: u64) -> bool {
+    timed_out || failed > 0 || exit_code.is_some_and(|code| code != 0)
+}
+
 fn print_json(value: &impl serde::Serialize) {
     match serde_json::to_string_pretty(value) {
         Ok(text) => println!("{text}"),
@@ -58,7 +62,7 @@ Usage:
   carnot init <dir> [name] [lang]
   carnot intake-scan <dir>
   carnot generate <dir> [lang]
-  carnot spec <dir> [--out <file>]
+  carnot spec <dir> [--out <file>] [--holdout <fraction>]
   carnot generate <dir> --spec <file>
   carnot proxy <listen> <control> <canary> [pct] [ws]
   carnot app [host:port] [ws]
@@ -70,7 +74,7 @@ Usage:
   carnot daemon [--once | --ticks N] [ws]
   carnot evolve [organ] [gens] [--demo] [--apply] [--candidate <file>]
   carnot proposal <accept|decline|undo> <proposal_id> [ws]
-  carnot verify [--demo] [--timeout <seconds>] [--against <spec>] [dir]
+  carnot verify [--demo] [--timeout <seconds>] [--against <spec>] [--all] [dir]
   carnot mcp [ws]
   carnot black-box <on|off|status> [ws]
   carnot search <query> [dir] [top_k]
@@ -81,8 +85,8 @@ Usage:
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
 `carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names. `carnot generate <dir> --spec <file>` rebuilds a Python library from a spec file and does not read the original tree.
-`carnot spec` writes a Python public-API spec (signatures, docstrings, literal examples, no function bodies). Other languages are not supported.
-`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs cargo, pytest or unittest, npm, or go tests when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `carnot verify <dir> --against <spec>` replays that spec's examples. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
+`carnot spec` writes a Python public-API spec (signatures, docstrings, literal examples, no function bodies). `--holdout` defaults to 0.3 and withholds that fraction of examples from generation. Other languages are not supported.
+`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs the project's own test command in that directory, so it executes the tree's code. It runs cargo, pytest or unittest, npm, or `go test -json` when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `carnot verify <dir> --against <spec>` grades held-out examples (`--all` grades every example). The process exits 1 when the run times out, the runner exits non-zero, or any graded example fails. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
 `carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`. Live evolve writes `.carnot/worktrees` and `.carnot/staged` in that same state directory.
 Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
@@ -201,6 +205,7 @@ fn main() {
         }
         "spec" => {
             let mut out_path: Option<String> = None;
+            let mut holdout = carnot::spec::DEFAULT_HOLDOUT;
             let mut dir: Option<&str> = None;
             let mut i = 2usize;
             while i < args.len() {
@@ -212,6 +217,18 @@ fn main() {
                             std::process::exit(2);
                         };
                         out_path = Some(path.clone());
+                    }
+                    "--holdout" => {
+                        i += 1;
+                        let Some(raw) = args.get(i).and_then(|s| s.parse::<f64>().ok()) else {
+                            eprintln!("Usage: carnot spec <dir> [--holdout <fraction>]");
+                            std::process::exit(2);
+                        };
+                        if !(0.0..=1.0).contains(&raw) {
+                            eprintln!("--holdout must be between 0 and 1");
+                            std::process::exit(2);
+                        }
+                        holdout = raw;
                     }
                     other if other.starts_with('-') => {
                         eprintln!("Unknown spec flag '{other}'");
@@ -233,7 +250,7 @@ fn main() {
             let out_file = out_path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::PathBuf::from(default_name));
-            match carnot::spec::write_spec(target, &out_file) {
+            match carnot::spec::write_spec(target, &out_file, holdout) {
                 Ok(spec) => {
                     eprintln!(
                         "wrote Python spec ({} modules) to {}",
@@ -444,6 +461,7 @@ fn main() {
             let mut demo = false;
             let mut timeout_secs = carnot::testrun::DEFAULT_VERIFY_TIMEOUT_SECS;
             let mut against: Option<String> = None;
+            let mut grade_all = false;
             let mut dir: Option<&str> = None;
             let mut i = 2usize;
             while i < args.len() {
@@ -457,6 +475,7 @@ fn main() {
                         };
                         against = Some(path.clone());
                     }
+                    "--all" => grade_all = true,
                     "--timeout" => {
                         i += 1;
                         let Some(secs) = args.get(i).and_then(|s| s.parse::<u64>().ok()) else {
@@ -487,13 +506,21 @@ fn main() {
                     Path::new(dir),
                     Path::new(&spec_file),
                     timeout_secs.saturating_mul(1000),
+                    grade_all,
                 ) {
                     Ok(report) => {
                         eprintln!(
-                            "spec examples: {} passed, {} failed",
-                            report.passed, report.failed
+                            "spec examples: {} passed, {} failed (held-out {} passed, {} failed)",
+                            report.passed,
+                            report.failed,
+                            report.held_out_passed,
+                            report.held_out_failed
                         );
                         print_json(&report);
+                        if verify_process_failed(report.timed_out, report.exit_code, report.failed)
+                        {
+                            std::process::exit(1);
+                        }
                     }
                     Err(e) => {
                         eprintln!("{e}");
@@ -548,6 +575,13 @@ fn main() {
                             );
                         }
                         print_json(&report);
+                        if verify_process_failed(
+                            report.timed_out,
+                            report.exit_code,
+                            report.failed.unwrap_or(0),
+                        ) {
+                            std::process::exit(1);
+                        }
                     }
                     Err(e) => {
                         eprintln!("{}", e);

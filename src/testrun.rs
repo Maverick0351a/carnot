@@ -6,6 +6,7 @@
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Default `carnot verify --timeout`, in seconds.
@@ -75,7 +76,7 @@ pub fn detect_test_runner(dir: &Path) -> Option<TestRunner> {
         return Some(TestRunner {
             kind: RunnerKind::Go,
             program: "go".to_string(),
-            args: vec!["test".to_string(), "./...".to_string()],
+            args: vec!["test".to_string(), "-json".to_string(), "./...".to_string()],
         });
     }
     if dir.join("tests").is_dir() || dir.join("test").is_dir() {
@@ -118,7 +119,13 @@ fn python_runner_with(dir: &Path, python: &str, pytest: bool) -> TestRunner {
         return TestRunner {
             kind: RunnerKind::Pytest,
             program: python.to_string(),
-            args: vec!["-m".to_string(), "pytest".to_string(), "-q".to_string()],
+            args: vec![
+                "-m".to_string(),
+                "pytest".to_string(),
+                "-q".to_string(),
+                "-p".to_string(),
+                "no:cacheprovider".to_string(),
+            ],
         };
     }
     let start = if dir.join("tests").is_dir() {
@@ -162,6 +169,20 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
     if matches!(runner.kind, RunnerKind::Pytest | RunnerKind::Unittest) {
         cmd.env("PYTHONDONTWRITEBYTECODE", "1");
     }
+    // shortcut: a fresh temp target dir, removed after the run. Upgrade if verify should reuse a warm cargo cache.
+    static CARGO_SEQ: AtomicU64 = AtomicU64::new(1);
+    let cargo_target = if runner.kind == RunnerKind::Cargo {
+        let path = std::env::temp_dir().join(format!(
+            "carnot-cargo-{}-{}",
+            std::process::id(),
+            CARGO_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::create_dir_all(&path);
+        cmd.env("CARGO_TARGET_DIR", &path);
+        Some(path)
+    } else {
+        None
+    };
     let started_at = Instant::now();
     let out = crate::proc_util::run_command_bounded(
         cmd,
@@ -187,10 +208,15 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
         };
     }
     let (passed, failed) = parse_test_counts(runner.kind, &out.stdout, &out.stderr);
+    if let Some(path) = cargo_target {
+        let _ = std::fs::remove_dir_all(path);
+    }
     let note = if out.timed_out {
         Some(format!("timed out after {} ms", timeout_ms))
     } else if passed.is_none() && failed.is_none() {
         Some("test command finished; pass/fail counts were not in the output".to_string())
+    } else if matches!((passed, failed), (Some(0), Some(0))) {
+        Some("pass rate omitted; runner reported zero cases".to_string())
     } else {
         None
     };
@@ -206,7 +232,17 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
     }
 }
 
-/// shortcut: npm and go counts stay empty unless the output has a node:test `# pass`/`# fail` line, a Jest `Tests:` line, or Go `--- PASS:`/`--- FAIL:` lines. Upgrade when those runners are asked for JSON.
+/// `None` when either count is missing or the total is zero, so an empty run is not a perfect score.
+pub fn schema_pass_rate(passed: Option<u64>, failed: Option<u64>) -> Option<f64> {
+    match (passed, failed) {
+        (Some(passed), Some(failed)) if passed + failed > 0 => {
+            Some(passed as f64 / (passed + failed) as f64)
+        }
+        _ => None,
+    }
+}
+
+/// shortcut: npm counts stay empty unless the output has a node:test `# pass`/`# fail` line or a Jest `Tests:` line. Go uses `go test -json` and falls back to `--- PASS:`/`--- FAIL:`. Upgrade when npm is asked for JSON.
 pub fn parse_test_counts(
     kind: RunnerKind,
     stdout: &str,
@@ -377,6 +413,29 @@ fn parse_npm(text: &str) -> (Option<u64>, Option<u64>) {
 fn parse_go(text: &str) -> (Option<u64>, Option<u64>) {
     let mut passed = 0u64;
     let mut failed = 0u64;
+    let mut saw_json = false;
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if value.get("Test").and_then(|test| test.as_str()).is_none() {
+            continue;
+        }
+        match value.get("Action").and_then(|action| action.as_str()) {
+            Some("pass") => {
+                passed += 1;
+                saw_json = true;
+            }
+            Some("fail") => {
+                failed += 1;
+                saw_json = true;
+            }
+            _ => {}
+        }
+    }
+    if saw_json {
+        return (Some(passed), Some(failed));
+    }
     let mut saw = false;
     for line in text.lines() {
         let trimmed = line.trim_start();
@@ -468,7 +527,7 @@ mod tests {
         fs::write(go.join("go.mod"), "module example.com/t\n\ngo 1.22\n").unwrap();
         let found = detect_test_runner(&go).unwrap();
         assert_eq!(found.kind, RunnerKind::Go);
-        assert_eq!(found.command_line(), "go test ./...");
+        assert_eq!(found.command_line(), "go test -json ./...");
 
         let tests_dir = temp_dir("tests-dir");
         fs::create_dir_all(tests_dir.join("test")).unwrap();
@@ -551,6 +610,17 @@ mod tests {
             "",
         );
         assert_eq!((p, f), (Some(1), Some(1)));
+        let (p, f) = parse_test_counts(
+            RunnerKind::Go,
+            "{\"Action\":\"pass\",\"Package\":\"example.com/t\",\"Test\":\"TestA\"}\n\
+             {\"Action\":\"fail\",\"Package\":\"example.com/t\",\"Test\":\"TestB\"}\n\
+             {\"Action\":\"pass\",\"Package\":\"example.com/t\"}\n",
+            "",
+        );
+        assert_eq!((p, f), (Some(1), Some(1)));
+        assert_eq!(schema_pass_rate(Some(0), Some(0)), None);
+        assert_eq!(schema_pass_rate(None, Some(1)), None);
+        assert_eq!(schema_pass_rate(Some(1), Some(1)), Some(0.5));
 
         let (p, f) = parse_test_counts(RunnerKind::Go, "ok  \texample.com/t\t0.001s\n", "");
         assert_eq!((p, f), (None, None));

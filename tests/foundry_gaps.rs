@@ -262,7 +262,7 @@ fn scout_and_verify_score_the_tree_unless_demo() {
     let verify_json: Value = serde_json::from_str(&verify_text).unwrap();
     assert_eq!(verify_json["demo"], false);
     assert_eq!(verify_json["checks_executed"], false);
-    assert_eq!(verify_json["summaries"][0]["schema_pass_rate"], 0.0);
+    assert!(verify_json["summaries"][0]["schema_pass_rate"].is_null());
     assert_eq!(verify_json["summaries"][0]["pareto_optimal"], false);
     assert!(verify_json["summaries"][0]["case_scores"]
         .as_array()

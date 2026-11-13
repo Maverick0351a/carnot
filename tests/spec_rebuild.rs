@@ -4,26 +4,13 @@ use carnot::evidence::sha256_hex;
 use carnot::spec::verbatim_ngram_hits;
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct TempDirGuard(PathBuf);
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+#[path = "support/tempdir.rs"]
+mod tempdir;
 
-fn temp_dir(label: &str) -> (PathBuf, TempDirGuard) {
-    static SEQ: AtomicU64 = AtomicU64::new(1);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let root =
-        std::env::temp_dir().join(format!("carnot-spec-{label}-{}-{seq}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
-    let guard = TempDirGuard(root.clone());
-    (root, guard)
+fn temp_dir(label: &str) -> (std::path::PathBuf, tempdir::TempDirGuard) {
+    tempdir::temp_dir("carnot-spec", label)
 }
 
 fn write_fixture(root: &std::path::Path) {
@@ -137,6 +124,8 @@ fn spec_generate_and_verify_round_trip_without_copying_bodies() {
     let spec_out = Command::new(exe)
         .args([
             "spec",
+            "--holdout",
+            "0.4",
             root.to_str().unwrap(),
             "--out",
             spec_path.to_str().unwrap(),
@@ -193,7 +182,7 @@ fn spec_generate_and_verify_round_trip_without_copying_bodies() {
     let certificate: Value = serde_json::from_str(&gen_out).unwrap();
     assert_eq!(certificate["spec_only"], true);
     assert_eq!(certificate["language"], "python");
-    assert_eq!(certificate["generator"], "python_example_table");
+    assert_eq!(certificate["generator"], "prototype_example_table");
     assert_eq!(
         certificate["spec_sha256"],
         sha256_hex(&fs::read(&spec_path).unwrap())
@@ -204,10 +193,41 @@ fn spec_generate_and_verify_round_trip_without_copying_bodies() {
             .unwrap();
     assert_eq!(on_disk["spec_sha256"], certificate["spec_sha256"]);
 
+    let spec_json: Value = serde_json::from_str(&spec_text).unwrap();
+    let mut held = Vec::new();
+    let mut train = Vec::new();
+    for module in spec_json["modules"].as_array().unwrap() {
+        for func in module["functions"].as_array().unwrap() {
+            for example in func["examples"].as_array().unwrap() {
+                let expected = example["expected"].as_str().unwrap().to_string();
+                if example["held_out"].as_bool().unwrap() {
+                    held.push(expected);
+                } else {
+                    train.push(expected);
+                }
+            }
+        }
+    }
+    assert!(
+        !held.is_empty(),
+        "default holdout should withhold at least one example: {spec_text}"
+    );
     let generated = fs::read_to_string(rebuild.join("sample/calc.py")).unwrap();
     assert!(generated.contains("Add two numbers."), "{generated}");
-    assert!(generated.contains("return 3"), "{generated}");
-    assert!(generated.contains("return -1"), "{generated}");
+    for expected in &train {
+        assert!(
+            generated.contains(&format!("return {expected}")),
+            "training example {expected} missing from {generated}"
+        );
+    }
+    for expected in &held {
+        if !train.contains(expected) {
+            assert!(
+                !generated.contains(&format!("return {expected}")),
+                "held-out example {expected} was compiled into {generated}"
+            );
+        }
+    }
     assert!(!generated.contains("lambda_"), "{generated}");
     assert!(
         !generated.contains("sentinel_method_body_aaa"),
@@ -241,13 +261,32 @@ fn spec_generate_and_verify_round_trip_without_copying_bodies() {
         .unwrap();
     let verify_err = String::from_utf8_lossy(&verify.stderr);
     let verify_out = String::from_utf8_lossy(&verify.stdout);
-    assert!(verify.status.success(), "{verify_err}\n{verify_out}");
+    assert_eq!(verify.status.code(), Some(1), "{verify_err}\n{verify_out}");
     let report: Value = serde_json::from_str(&verify_out).unwrap();
     assert_eq!(report["checks_executed"], true);
     assert_eq!(report["demo"], false);
-    assert_eq!(report["failed"], 0);
-    assert!(report["passed"].as_u64().unwrap() >= 6, "{report}");
-    assert_eq!(report["exit_code"], 0);
+    assert_eq!(report["held_out_passed"], 0);
+    assert_eq!(report["held_out_failed"], held.len() as u64);
+    assert_eq!(report["failed"], held.len() as u64);
+    assert_eq!(report["passed"], 0);
+    let graded_all = Command::new(exe)
+        .args([
+            "verify",
+            "--all",
+            rebuild.to_str().unwrap(),
+            "--against",
+            spec_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let all_out = String::from_utf8_lossy(&graded_all.stdout);
+    let all: Value = serde_json::from_str(&all_out).unwrap();
+    assert_eq!(all["held_out_failed"], held.len() as u64, "{all}");
+    assert_eq!(all["held_out_passed"], 0);
+    assert!(
+        all["passed"].as_u64().unwrap() >= train.len() as u64,
+        "{all}"
+    );
     assert_eq!(report["certificate"]["spec_only"], true);
     assert_eq!(
         report["certificate"]["spec_sha256"],
@@ -256,6 +295,31 @@ fn spec_generate_and_verify_round_trip_without_copying_bodies() {
     assert_eq!(report["certificate"]["verbatim_overlap"], false);
     assert_eq!(report["certificate"]["verbatim_ngram_hits"], 0);
     assert!(!rebuild.join(".carnot").exists());
+}
+
+#[test]
+fn generate_rejects_a_param_that_is_not_an_identifier() {
+    let exe = env!("CARGO_BIN_EXE_carnot");
+    let (root, _guard) = temp_dir("inject");
+    let spec = root.join("evil.json");
+    fs::write(
+        &spec,
+        r#"{"language":"python","origin_name":"evil","modules":[{"name":"evil","functions":[{"name":"evil","signature":"evil(x)","params":["):\n    import os"],"lookup":true,"examples":[]}]}]}"#,
+    )
+    .unwrap();
+    let out = Command::new(exe)
+        .args([
+            "generate",
+            root.join("out").to_str().unwrap(),
+            "--spec",
+            spec.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("refusing parameter"), "{err}");
+    assert!(!root.join("out").join("evil.py").exists());
 }
 
 #[test]

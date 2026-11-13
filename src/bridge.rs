@@ -1793,16 +1793,19 @@ impl CarnotMachine {
             .map(|runner| crate::testrun::run_test_runner(dir, &runner, timeout_ms));
         let (variant_name, model, cases, pass_rate, failures, latency, note, checks_executed) =
             if let Some(ref run) = execution {
+                let pass_rate = crate::testrun::schema_pass_rate(run.passed, run.failed);
                 let cases = match (run.passed, run.failed) {
-                    (Some(passed), Some(failed)) => (passed + failed) as usize,
-                    _ => source_files.len(),
-                };
-                let pass_rate = match (run.passed, run.failed) {
                     (Some(passed), Some(failed)) if passed + failed > 0 => {
-                        passed as f64 / (passed + failed) as f64
+                        (passed + failed) as usize
                     }
-                    (Some(_), Some(_)) => 1.0,
-                    _ => 0.0,
+                    _ => 0,
+                };
+                let note = if pass_rate.is_none() {
+                    run.note.clone().or_else(|| {
+                        Some("pass rate omitted; pass/fail counts were missing".to_string())
+                    })
+                } else {
+                    run.note.clone()
                 };
                 (
                     "project test run".to_string(),
@@ -1811,7 +1814,7 @@ impl CarnotMachine {
                     pass_rate,
                     run.failed.unwrap_or(0) as usize,
                     run.duration_ms,
-                    run.note.clone(),
+                    note,
                     run.started,
                 )
             } else {
@@ -1819,7 +1822,7 @@ impl CarnotMachine {
                     "pointed workspace inventory".to_string(),
                     "inventory".to_string(),
                     source_files.len(),
-                    0.0,
+                    None,
                     0,
                     0,
                     Some("no test runner detected".to_string()),

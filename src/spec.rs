@@ -19,6 +19,8 @@ const SCRIPT: &str = include_str!("spec_extract.py");
 const MAX_EXAMPLE_ROWS: usize = 50;
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const VERBATIM_N: usize = 12;
+pub const DEFAULT_HOLDOUT: f64 = 0.3;
+pub const GENERATOR_PROTOTYPE: &str = "prototype_example_table";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorExample {
@@ -26,6 +28,9 @@ pub struct BehaviorExample {
     #[serde(default)]
     pub kwargs: BTreeMap<String, String>,
     pub expected: String,
+    /// True when this example is withheld from `generate --spec` and graded by `verify --against`.
+    #[serde(default)]
+    pub held_out: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +81,8 @@ pub struct RebuildCertificate {
     pub spec_only: bool,
     pub spec_sha256: String,
     pub language: String,
-    /// shortcut: example lookup, not an algorithm. Upgrade when a proposer can synthesize bodies from signatures without the original source.
+    /// Prototype example lookup. It does not synthesize logic.
+    /// shortcut: recorded training examples only. Upgrade when a proposer can synthesize bodies from signatures without the original source.
     pub generator: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbatim_overlap: Option<bool>,
@@ -89,6 +95,8 @@ pub struct ExampleResult {
     pub module: String,
     pub func: String,
     pub ok: bool,
+    #[serde(default)]
+    pub held_out: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -102,6 +110,8 @@ pub struct SpecVerifyReport {
     pub exit_code: Option<i32>,
     pub passed: u64,
     pub failed: u64,
+    pub held_out_passed: u64,
+    pub held_out_failed: u64,
     pub duration_ms: u64,
     pub timed_out: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,7 +158,7 @@ fn run_python(
 }
 
 /// Read `dir` and write a Python spec. The spec has no function bodies.
-pub fn write_spec(dir: &Path, out_file: &Path) -> Result<LibrarySpec, String> {
+pub fn write_spec(dir: &Path, out_file: &Path, holdout: f64) -> Result<LibrarySpec, String> {
     if !dir.is_dir() {
         return Err(format!("spec target is not a directory: {}", dir.display()));
     }
@@ -175,6 +185,8 @@ pub fn write_spec(dir: &Path, out_file: &Path) -> Result<LibrarySpec, String> {
     if spec.modules.is_empty() {
         return Err("spec extraction supports Python libraries only".to_string());
     }
+    let mut spec = spec;
+    assign_holdout(&mut spec, holdout);
     if let Some(parent) = out_file.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -227,7 +239,7 @@ pub fn generate_from_spec(spec_path: &Path, out_dir: &Path) -> Result<RebuildCer
         spec_only: true,
         spec_sha256: sha256_hex(&bytes),
         language: "python".to_string(),
-        generator: "python_example_table".to_string(),
+        generator: GENERATOR_PROTOTYPE.to_string(),
         verbatim_overlap: None,
         verbatim_ngram_hits: None,
     };
@@ -262,11 +274,46 @@ fn ensure_literals(literals: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn assign_holdout(spec: &mut LibrarySpec, fraction: f64) {
+    for module in &mut spec.modules {
+        for func in &mut module.functions {
+            for example in &mut func.examples {
+                example.held_out = example_held_out(&module.name, &func.name, example, fraction);
+            }
+        }
+    }
+}
+
+fn example_held_out(module: &str, func: &str, example: &BehaviorExample, fraction: f64) -> bool {
+    if fraction <= 0.0 {
+        return false;
+    }
+    if fraction >= 1.0 {
+        return true;
+    }
+    let mut payload = format!("{module}\n{func}\n");
+    for arg in &example.args {
+        payload.push_str(arg);
+        payload.push('\n');
+    }
+    for (key, value) in &example.kwargs {
+        payload.push_str(key);
+        payload.push('=');
+        payload.push_str(value);
+        payload.push('\n');
+    }
+    payload.push_str(&example.expected);
+    let hex = sha256_hex(payload.as_bytes());
+    let prefix = u64::from_str_radix(&hex[..16], 16).unwrap_or(0);
+    (prefix as f64) < fraction * (u64::MAX as f64)
+}
+
 fn validate_spec(spec: &LibrarySpec) -> Result<(), String> {
     for module in &spec.modules {
         module_path(&module.name, spec)?;
         for func in &module.functions {
             check_signature(&func.name, &func.signature)?;
+            check_params(&func.params)?;
         }
         for class in &module.classes {
             if !is_ident(&class.name) {
@@ -274,9 +321,21 @@ fn validate_spec(spec: &LibrarySpec) -> Result<(), String> {
             }
             for method in &class.methods {
                 check_signature(&method.name, &method.signature)?;
+                check_params(&method.params)?;
             }
         }
     }
+    Ok(())
+}
+
+fn check_params(params: &[String]) -> Result<(), String> {
+    for param in params {
+        if !is_ident(param) {
+            return Err(format!("refusing parameter '{param}'"));
+        }
+    }
+    // Defaults from the signature text are not emitted. `def` uses `name=None`.
+    // shortcut: non-literal defaults are dropped, not checked. Upgrade when a spec records defaults as literals worth keeping.
     Ok(())
 }
 
@@ -374,7 +433,7 @@ fn render_function(func: &SpecFunction) -> String {
         out.push_str(&format!("    {}\n", python_string(doc)));
     }
     if func.lookup {
-        for example in &func.examples {
+        for example in func.examples.iter().filter(|example| !example.held_out) {
             if let Some((names, values)) = match_call(&func.params, example) {
                 out.push_str(&format!(
                     "    if {} == {}:\n        return {}\n",
@@ -512,6 +571,7 @@ pub fn verify_against(
     rebuild_dir: &Path,
     spec_path: &Path,
     timeout_ms: u64,
+    grade_all: bool,
 ) -> Result<SpecVerifyReport, String> {
     if !rebuild_dir.is_dir() {
         return Err(format!(
@@ -526,6 +586,7 @@ pub fn verify_against(
     if spec.language != "python" {
         return Err("verify --against supports Python specs only".to_string());
     }
+    let graded = |example: &BehaviorExample| grade_all || example.held_out;
     let example_count: usize = spec
         .modules
         .iter()
@@ -533,21 +594,27 @@ pub fn verify_against(
             module
                 .functions
                 .iter()
-                .map(|func| func.examples.len())
+                .map(|func| {
+                    func.examples
+                        .iter()
+                        .filter(|example| graded(example))
+                        .count()
+                })
                 .sum::<usize>()
         })
         .sum();
+    let which = if grade_all { "all" } else { "held-out" };
     let python = python_program();
     let script = temp_script()?;
     let script_s = script.0.to_string_lossy().into_owned();
     let rebuild_s = rebuild_dir.to_string_lossy().into_owned();
     let spec_s = spec_path.to_string_lossy().into_owned();
-    let command = format!("{python} spec_extract.py check {rebuild_s} {spec_s}");
+    let command = format!("{python} spec_extract.py check {rebuild_s} {spec_s} {which}");
     let mut certificate = RebuildCertificate {
         spec_only: true,
         spec_sha256: sha256_hex(&bytes),
         language: "python".to_string(),
-        generator: "python_example_table".to_string(),
+        generator: GENERATOR_PROTOTYPE.to_string(),
         verbatim_overlap: None,
         verbatim_ngram_hits: None,
     };
@@ -563,10 +630,15 @@ pub fn verify_against(
         }
     }
     if example_count == 0 {
-        let empty = if let Some(existing) = note {
-            format!("{existing}; spec has no behavioral examples")
+        let why = if grade_all {
+            "spec has no behavioral examples"
         } else {
-            "spec has no behavioral examples".to_string()
+            "spec has no held-out examples"
+        };
+        let empty = if let Some(existing) = note {
+            format!("{existing}; {why}")
+        } else {
+            why.to_string()
         };
         return Ok(SpecVerifyReport {
             demo: false,
@@ -576,6 +648,8 @@ pub fn verify_against(
             exit_code: None,
             passed: 0,
             failed: 0,
+            held_out_passed: 0,
+            held_out_failed: 0,
             duration_ms: 0,
             timed_out: false,
             note: Some(empty),
@@ -585,7 +659,7 @@ pub fn verify_against(
         });
     }
     let out = run_python(
-        &[&script_s, "check", &rebuild_s, &spec_s],
+        &[&script_s, "check", &rebuild_s, &spec_s, which],
         None,
         timeout_ms.max(1),
     )?;
@@ -598,6 +672,8 @@ pub fn verify_against(
             exit_code: None,
             passed: 0,
             failed: 0,
+            held_out_passed: 0,
+            held_out_failed: 0,
             duration_ms: out.duration_ms,
             timed_out: true,
             note: Some(format!("timed out after {timeout_ms} ms")),
@@ -627,6 +703,10 @@ pub fn verify_against(
                     .unwrap_or("")
                     .to_string(),
                 ok: row.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+                held_out: row
+                    .get("held_out")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 error: row
                     .get("error")
                     .and_then(|v| v.as_str())
@@ -636,6 +716,8 @@ pub fn verify_against(
     }
     let passed = results.iter().filter(|row| row.ok).count() as u64;
     let failed = results.len() as u64 - passed;
+    let held_out_passed = results.iter().filter(|row| row.held_out && row.ok).count() as u64;
+    let held_out_failed = results.iter().filter(|row| row.held_out && !row.ok).count() as u64;
     let omitted = results.len().saturating_sub(MAX_EXAMPLE_ROWS) as u64;
     results.truncate(MAX_EXAMPLE_ROWS);
     Ok(SpecVerifyReport {
@@ -646,6 +728,8 @@ pub fn verify_against(
         exit_code: Some(if failed == 0 { 0 } else { 1 }),
         passed,
         failed,
+        held_out_passed,
+        held_out_failed,
         duration_ms: out.duration_ms,
         timed_out: false,
         note,
@@ -812,6 +896,22 @@ fn token_ngrams(src: &str, n: usize) -> HashSet<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn holdout_boundaries_are_deterministic() {
+        let example = BehaviorExample {
+            args: vec!["1".to_string()],
+            kwargs: BTreeMap::new(),
+            expected: "2".to_string(),
+            held_out: false,
+        };
+        assert!(!example_held_out("m", "f", &example, 0.0));
+        assert!(example_held_out("m", "f", &example, 1.0));
+        assert_eq!(
+            example_held_out("m", "f", &example, 0.3),
+            example_held_out("m", "f", &example, 0.3)
+        );
+    }
 
     #[test]
     fn twelve_token_run_flags_overlap_and_docstrings_do_not() {

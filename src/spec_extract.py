@@ -515,7 +515,26 @@ def extract(root):
     }
 
 
-def check(rebuild, spec_path):
+def example_selected(example, which):
+    held = bool(example.get("held_out"))
+    if which == "all":
+        return True
+    return held
+
+
+def record(results, module, func, example, ok, error):
+    results.append(
+        {
+            "module": module,
+            "func": func,
+            "ok": ok,
+            "held_out": bool(example.get("held_out")),
+            "error": error,
+        }
+    )
+
+
+def check(rebuild, spec_path, which):
     sys.path.insert(0, rebuild)
     with open(spec_path, encoding="utf-8") as handle:
         spec = json.load(handle)
@@ -530,17 +549,19 @@ def check(rebuild, spec_path):
         for fn in module.get("functions", []):
             target = None if imported is None else getattr(imported, fn["name"], None)
             for example in fn.get("examples", []):
+                if not example_selected(example, which):
+                    continue
                 if import_error is not None:
-                    results.append({"module": module["name"], "func": fn["name"], "ok": False, "error": import_error})
+                    record(results, module["name"], fn["name"], example, False, import_error)
                     continue
                 if target is None:
-                    results.append(
-                        {
-                            "module": module["name"],
-                            "func": fn["name"],
-                            "ok": False,
-                            "error": "function is not exported",
-                        }
+                    record(
+                        results,
+                        module["name"],
+                        fn["name"],
+                        example,
+                        False,
+                        "function is not exported",
                     )
                     continue
                 try:
@@ -549,22 +570,22 @@ def check(rebuild, spec_path):
                     got = target(*args, **kwargs)
                     expected = ast.literal_eval(example["expected"])
                     ok = got == expected
-                    results.append(
-                        {
-                            "module": module["name"],
-                            "func": fn["name"],
-                            "ok": ok,
-                            "error": None if ok else f"{got!r} != {expected!r}",
-                        }
+                    record(
+                        results,
+                        module["name"],
+                        fn["name"],
+                        example,
+                        ok,
+                        None if ok else f"{got!r} != {expected!r}",
                     )
                 except Exception as exc:  # noqa: BLE001
-                    results.append(
-                        {
-                            "module": module["name"],
-                            "func": fn["name"],
-                            "ok": False,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
+                    record(
+                        results,
+                        module["name"],
+                        fn["name"],
+                        example,
+                        False,
+                        f"{type(exc).__name__}: {exc}",
                     )
     json.dump({"results": results}, sys.stdout)
     sys.stdout.write("\n")
@@ -594,10 +615,11 @@ def main():
         sys.stdout.write("\n")
         return 0
     if mode == "check":
-        if len(sys.argv) != 4:
-            print("usage: spec_extract.py check <rebuild> <spec>", file=sys.stderr)
+        if len(sys.argv) not in (4, 5):
+            print("usage: spec_extract.py check <rebuild> <spec> [held-out|all]", file=sys.stderr)
             return 2
-        check(sys.argv[2], sys.argv[3])
+        which = sys.argv[4] if len(sys.argv) == 5 else "held-out"
+        check(sys.argv[2], sys.argv[3], which)
         return 0
     if mode == "literals":
         literals()

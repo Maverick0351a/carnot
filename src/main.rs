@@ -58,6 +58,8 @@ Usage:
   carnot init <dir> [name] [lang]
   carnot intake-scan <dir>
   carnot generate <dir> [lang]
+  carnot spec <dir> [--out <file>]
+  carnot generate <dir> --spec <file>
   carnot proxy <listen> <control> <canary> [pct] [ws]
   carnot app [host:port] [ws]
   carnot serve [host:port] [ws]
@@ -68,7 +70,7 @@ Usage:
   carnot daemon [--once | --ticks N] [ws]
   carnot evolve [organ] [gens] [--demo] [--apply] [--candidate <file>]
   carnot proposal <accept|decline|undo> <proposal_id> [ws]
-  carnot verify [--demo] [--timeout <seconds>] [dir]
+  carnot verify [--demo] [--timeout <seconds>] [--against <spec>] [dir]
   carnot mcp [ws]
   carnot black-box <on|off|status> [ws]
   carnot search <query> [dir] [top_k]
@@ -78,8 +80,9 @@ Usage:
   carnot obligations [ws]
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
-`carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names.
-`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs cargo, pytest or unittest, npm, or go tests when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
+`carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names. `carnot generate <dir> --spec <file>` rebuilds a Python library from a spec file and does not read the original tree.
+`carnot spec` writes a Python public-API spec (signatures, docstrings, literal examples, no function bodies). Other languages are not supported.
+`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs cargo, pytest or unittest, npm, or go tests when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `carnot verify <dir> --against <spec>` replays that spec's examples. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
 `carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`. Live evolve writes `.carnot/worktrees` and `.carnot/staged` in that same state directory.
 Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
@@ -196,10 +199,102 @@ fn main() {
                 }
             }
         }
+        "spec" => {
+            let mut out_path: Option<String> = None;
+            let mut dir: Option<&str> = None;
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--out" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot spec <dir> --out <file>");
+                            std::process::exit(2);
+                        };
+                        out_path = Some(path.clone());
+                    }
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown spec flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => dir = Some(other),
+                }
+                i += 1;
+            }
+            let Some(dir) = dir else {
+                eprintln!("Usage: carnot spec <dir> [--out <file>]");
+                std::process::exit(2);
+            };
+            let target = Path::new(dir);
+            let default_name = target
+                .file_name()
+                .map(|name| format!("{}.carnot-spec.json", name.to_string_lossy()))
+                .unwrap_or_else(|| "library.carnot-spec.json".to_string());
+            let out_file = out_path
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(default_name));
+            match carnot::spec::write_spec(target, &out_file) {
+                Ok(spec) => {
+                    eprintln!(
+                        "wrote Python spec ({} modules) to {}",
+                        spec.modules.len(),
+                        out_file.display()
+                    );
+                    print_json(&spec);
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         "generate" => {
-            let dir_str = args.get(2).map(|s| s.as_str()).unwrap_or("./generated-app");
+            let mut spec_path: Option<String> = None;
+            let mut positionals: Vec<&str> = Vec::new();
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--spec" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot generate <dir> --spec <file>");
+                            std::process::exit(2);
+                        };
+                        spec_path = Some(path.clone());
+                    }
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown generate flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => positionals.push(other),
+                }
+                i += 1;
+            }
+            let dir_str = positionals.first().copied().unwrap_or("./generated-app");
             let target_dir = Path::new(dir_str);
-            let lang = if let Some(raw) = args.get(3) {
+            if let Some(spec_file) = spec_path {
+                if let Some(lang) = positionals.get(1) {
+                    if !lang.eq_ignore_ascii_case("python") {
+                        eprintln!("generate --spec supports Python libraries only");
+                        std::process::exit(2);
+                    }
+                }
+                match carnot::spec::generate_from_spec(Path::new(&spec_file), target_dir) {
+                    Ok(certificate) => {
+                        eprintln!(
+                            "rebuilt Python package from spec {} (spec-only, sha256 {})",
+                            spec_file, certificate.spec_sha256
+                        );
+                        print_json(&certificate);
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            let lang = if let Some(raw) = positionals.get(1) {
                 match TargetLanguage::parse_known(raw) {
                     Ok(lang) => Some(lang),
                     Err(e) => {
@@ -348,11 +443,20 @@ fn main() {
         "verify" => {
             let mut demo = false;
             let mut timeout_secs = carnot::testrun::DEFAULT_VERIFY_TIMEOUT_SECS;
+            let mut against: Option<String> = None;
             let mut dir: Option<&str> = None;
             let mut i = 2usize;
             while i < args.len() {
                 match args[i].as_str() {
                     "--demo" => demo = true,
+                    "--against" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot verify <dir> --against <spec>");
+                            std::process::exit(2);
+                        };
+                        against = Some(path.clone());
+                    }
                     "--timeout" => {
                         i += 1;
                         let Some(secs) = args.get(i).and_then(|s| s.parse::<u64>().ok()) else {
@@ -373,7 +477,30 @@ fn main() {
                 }
                 i += 1;
             }
-            if demo {
+            if demo && against.is_some() {
+                eprintln!("verify --demo and --against cannot be combined");
+                std::process::exit(2);
+            }
+            if let Some(spec_file) = against {
+                let dir = dir.unwrap_or(".");
+                match carnot::spec::verify_against(
+                    Path::new(dir),
+                    Path::new(&spec_file),
+                    timeout_secs.saturating_mul(1000),
+                ) {
+                    Ok(report) => {
+                        eprintln!(
+                            "spec examples: {} passed, {} failed",
+                            report.passed, report.failed
+                        );
+                        print_json(&report);
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if demo {
                 let mut machine = CarnotMachine::new_seeded();
                 let summaries = machine.run_evaluations(DatasetSplit::Golden);
                 eprintln!("offline demo (seeded golden set); not a score of the pointed workspace");

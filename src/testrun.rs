@@ -84,7 +84,7 @@ pub fn detect_test_runner(dir: &Path) -> Option<TestRunner> {
     None
 }
 
-fn python_program() -> String {
+pub(crate) fn python_program() -> String {
     for candidate in ["python3", "python"] {
         let ok = Command::new(candidate)
             .arg("-c")

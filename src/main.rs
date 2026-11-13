@@ -21,17 +21,11 @@ fn launch_desktop_app_window(url: &str) {
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         ];
-        for edge in edge_candidates {
-            if Path::new(edge).exists() && Command::new(edge).arg(&app_arg).spawn().is_ok() {
-                return;
-            }
-        }
-        if Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
-            .is_ok()
-        {
-            return;
+        let launched_edge = edge_candidates.iter().any(|edge| {
+            Path::new(edge).exists() && Command::new(edge).arg(&app_arg).spawn().is_ok()
+        });
+        if !launched_edge {
+            let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
         }
     }
     #[cfg(target_os = "macos")]

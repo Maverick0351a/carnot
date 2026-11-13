@@ -6,7 +6,9 @@ use carnot::intake::{
     detect_manifest_spdx, policy_for_spdx, scan_directory_spdx_zones, AccessPolicy,
 };
 use carnot::scout::TargetLanguage;
-use carnot::workspace::{init_workspace, materialize_project_to_disk, WorkspaceLayout};
+#[cfg(unix)]
+use carnot::workspace::materialize_project_to_disk;
+use carnot::workspace::{init_workspace, WorkspaceLayout};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;

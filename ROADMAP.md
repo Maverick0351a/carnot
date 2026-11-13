@@ -21,9 +21,9 @@ Earlier prototypes (`v0.1`–`v0.4`) proved the deterministic algorithms (`Murmu
 
 ---
 
-## Shipped in `v1.0-rc` — Clean-Room Reconstruction Spine, Black-Box Shield & Hybrid Search
+## Shipped in the tree at crate `0.5.0` — Clean-Room Reconstruction Spine, Black-Box Shield & Hybrid Search
 
-All items below are covered by `cargo test --all-targets` (41+ tests across the integration suites including `daemon_experiment_tests`) and `cargo clippy --all-targets -- -D warnings`, still with only `serde` + `serde_json` dependencies.
+The crate version is `0.5.0`. The items below are in this tree; they are not a `1.0` release. They are covered by `cargo test` and `cargo clippy --all-targets -- -D warnings`, still with only `serde` + `serde_json` dependencies.
 
 1. **Black-Box Shield ON/OFF (`CarnotManifest.black_box_enforced`, default `true`):**
    - ON = strict Chinese-Wall quarantine for `AGPL`/`GPL`/`SSPL`/`BSL`/EULA zones. OFF = white-box inspection for permissive or owned code. Every toggle mints a fresh `CleanRoomCertificate` (with an honest `black_box_enforced` flag and attestation statement) plus a `black_box_shield_toggle` evidence receipt.
@@ -77,7 +77,7 @@ All items below are covered by `cargo test --all-targets` (41+ tests across the 
   - Enforce hard `EntropyBudget` byte/branch ceilings inside `run_git_worktree_trial` before ratcheting.
 
 ### Milestone `v0.9` — Streaming HTTP/1.1 Chunked + TLS Termination & Shadow Mirroring
-- **Current state (`v0.5`):** `src/proxy.rs` handles HTTP/1.1 `Content-Length` request forwarding, `X-User-Id` sticky routing, transparent `5xx` failover to control, `<0.1 ms` circuit-breaker trips, and `.carnot/regressions.jsonl` capture.
+- **Current state (`v0.5`):** `src/proxy.rs` handles HTTP/1.1 `Content-Length` request forwarding, `X-User-Id` sticky routing, transparent `5xx` failover to control, `<0.1 ms` circuit-breaker trips, and `.carnot/regressions.jsonl` capture. `ProxyExtendedOptions::shadow_mirror_canary` can fork a background canary request from library callers. `carnot proxy` does not enable it.
 - **Target (`v0.9`):**
   - Add asynchronous dark-traffic **shadow mirroring** (100% synchronous response from `control`, non-blocking clone to `canary` with response-body JSON structural diffing).
   - Support chunked transfer-encoding streaming and OpenTelemetry OTLP trace-header propagation (`traceparent`).
@@ -87,4 +87,4 @@ All items below are covered by `cargo test --all-targets` (41+ tests across the 
 - **Target (`v1.0`):**
   - Sign Clean-Room IP Certificates and `.carnot/ledger.jsonl` checkpoints with offline Ed25519 keys (`carnot verify-cert <cert.json> --pubkey <pk>`) for third-party enterprise M&A / compliance audits.
   - Offline cryptographic license token verification for air-gapped Pro deployments.
-  - Cross-platform reproducible release binaries (`x86_64-pc-windows-msvc`, `x86_64-unknown-linux-musl`, `aarch64-apple-darwin`) published via CI with SHA-256 provenance attestations.
+  - Cross-platform release binaries are built by `.github/workflows/release.yml` when a `v*` tag is pushed (host triples for Linux, macOS, and Windows, with SHA-256 files). crates.io publish and Ed25519 provenance are not automated. `x86_64-unknown-linux-musl` is not in that matrix.

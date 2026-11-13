@@ -96,6 +96,51 @@ pub fn sanitize_workspace_rel_path(root: &Path, rel: &str) -> Result<String, Str
     Ok(rel_out)
 }
 
+/// Join `rel` onto `root` without following a symlink out of the workspace.
+///
+/// Missing components are allowed so callers can create them. `root` must exist.
+/// shortcut: this is check-then-create, not an `O_NOFOLLOW` open. Upgrade if
+/// untrusted writers can swap a directory for a symlink between the check and the write.
+pub fn resolve_contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let rel_norm = sanitize_workspace_rel_path(root, rel)?;
+    let base = fs::canonicalize(root).map_err(|e| {
+        format!(
+            "workspace root '{}' is not a directory: {}",
+            root.display(),
+            e
+        )
+    })?;
+    let mut cur = base.clone();
+    for comp in Path::new(&rel_norm).components() {
+        let Component::Normal(name) = comp else {
+            return Err(format!("path component rejected in '{rel}'"));
+        };
+        cur.push(name);
+        match fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(format!(
+                    "refusing to follow symlink '{}' outside '{}'",
+                    cur.display(),
+                    base.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!("failed to inspect '{}': {}", cur.display(), e));
+            }
+        }
+    }
+    if !cur.starts_with(&base) {
+        return Err(format!(
+            "path '{}' escapes workspace '{}'",
+            cur.display(),
+            base.display()
+        ));
+    }
+    Ok(cur)
+}
+
 /// Appends a single JSON object line atomically to a `.jsonl` ledger file on disk.
 pub fn append_jsonl(path: &Path, record: &Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -263,7 +308,7 @@ pub fn materialize_project_to_disk(
         .map_err(|e| format!("Failed to create target directory: {}", e))?;
 
     for (rel_path, content) in &plan.planned_files {
-        let dest = target_dir.join(rel_path);
+        let dest = resolve_contained_path(target_dir, rel_path)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create '{}': {}", parent.display(), e))?;

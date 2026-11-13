@@ -455,18 +455,18 @@ fn scoped_evolve_blocks_island_ring_and_subprocess_json_verifier() {
     assert!(spliced.contains("let x = 42;"));
 
     // Independent subprocess last-line JSON evaluator
+    // Python, not PowerShell: Windows command-line quoting breaks a `-Command`
+    // string that itself contains JSON double quotes.
     #[cfg(target_os = "windows")]
     let (prog, ok_args, bad_args): (&str, &[&str], &[&str]) = (
-        "powershell",
+        "python",
         &[
-            "-NoProfile",
-            "-Command",
-            "Write-Output 'boot_log'; Write-Output '{\"objective\":2.635983,\"validity\":1.0}'",
+            "-c",
+            "import json; print('boot_log'); print(json.dumps({'objective': 2.635983, 'validity': 1.0}))",
         ],
         &[
-            "-NoProfile",
-            "-Command",
-            "Write-Output '{\"objective\":2.635983,\"validity\":0.0}'",
+            "-c",
+            "import json; print(json.dumps({'objective': 2.635983, 'validity': 0.0}))",
         ],
     );
     #[cfg(not(target_os = "windows"))]

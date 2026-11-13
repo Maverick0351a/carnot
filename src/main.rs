@@ -21,17 +21,11 @@ fn launch_desktop_app_window(url: &str) {
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         ];
-        for edge in edge_candidates {
-            if Path::new(edge).exists() && Command::new(edge).arg(&app_arg).spawn().is_ok() {
-                return;
-            }
-        }
-        if Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
-            .is_ok()
-        {
-            return;
+        let launched_edge = edge_candidates.iter().any(|edge| {
+            Path::new(edge).exists() && Command::new(edge).arg(&app_arg).spawn().is_ok()
+        });
+        if !launched_edge {
+            let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
         }
     }
     #[cfg(target_os = "macos")]
@@ -44,22 +38,79 @@ fn launch_desktop_app_window(url: &str) {
     }
 }
 
+fn print_json(value: &impl serde::Serialize) {
+    match serde_json::to_string_pretty(value) {
+        Ok(text) => println!("{text}"),
+        Err(e) => {
+            eprintln!("Failed to serialize JSON: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_usage() {
+    println!(
+        "\
+carnot {version} — clean-room refinery, license firewall, project emitter, worktree evolver
+
+Usage:
+  carnot help
+  carnot init <dir> [name] [lang]
+  carnot intake-scan <dir>
+  carnot generate <dir> [lang]
+  carnot proxy <listen> <control> <canary> [pct] [ws]
+  carnot app [host:port] [ws]
+  carnot serve [host:port] [ws]
+  carnot demo
+  carnot scout [dir] [lang]
+  carnot build-plan [lang]
+  carnot point <dir>
+  carnot daemon [--once | --ticks N] [ws]
+  carnot evolve [organ] [gens] [--demo] [--apply]
+  carnot proposal <accept|decline|undo> <proposal_id> [ws]
+  carnot verify
+  carnot mcp [ws]
+  carnot black-box <on|off|status> [ws]
+  carnot search <query> [dir] [top_k]
+  carnot related <file> <line> [dir] [top_k]
+  carnot hotspots [goal] [dir]
+  carnot advise [ws]
+  carnot obligations [ws]
+
+`carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
+`carnot generate` writes into a directory created by `carnot init`.
+Live evolve needs an explicit candidate. The CLI does not accept one; `carnot daemon` reports a skip until a candidate is supplied through MCP (`carnot_daemon_tick`).
+Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
+",
+        version = env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// Load a workspace when `carnot.manifest.json` is present.
+/// A missing manifest returns the in-memory demo machine and does not bind it
+/// to the path. A present but unreadable manifest is an error.
 fn load_or_seed_machine(workspace_arg: Option<&str>) -> CarnotMachine {
+    match try_load_machine(workspace_arg) {
+        Ok(machine) => machine,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn try_load_machine(workspace_arg: Option<&str>) -> Result<CarnotMachine, String> {
     if let Some(ws) = workspace_arg {
         let p = Path::new(ws);
-        if p.join("carnot.manifest.json").exists() {
-            if let Ok(m) = CarnotMachine::from_workspace(p) {
-                return m;
-            }
+        if p.join("carnot.manifest.json").is_file() {
+            return CarnotMachine::from_workspace(p);
         }
+        return Ok(CarnotMachine::new_seeded());
     }
-    let cwd_manifest = Path::new("carnot.manifest.json");
-    if cwd_manifest.exists() {
-        if let Ok(m) = CarnotMachine::from_workspace(Path::new(".")) {
-            return m;
-        }
+    if Path::new("carnot.manifest.json").is_file() {
+        return CarnotMachine::from_workspace(Path::new("."));
     }
-    CarnotMachine::new_seeded()
+    Ok(CarnotMachine::new_seeded())
 }
 
 fn serve_workbench(bind_addr: &str, open_app_window: bool, workspace_dir: Option<&str>) {
@@ -70,7 +121,13 @@ fn serve_workbench(bind_addr: &str, open_app_window: bool, workspace_dir: Option
             std::process::exit(1);
         }
     };
-    let local = listener.local_addr().unwrap();
+    let local = match listener.local_addr() {
+        Ok(addr) => addr,
+        Err(e) => {
+            eprintln!("Failed to read listener address: {e}");
+            std::process::exit(1);
+        }
+    };
     let url = format!("http://{}/", local);
     println!("Carnot App Shell & Cutover Server listening on {}", url);
     println!("  App Shell UI:          {}", url);
@@ -96,9 +153,10 @@ fn serve_workbench(bind_addr: &str, open_app_window: bool, workspace_dir: Option
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("demo");
+    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
     match cmd {
+        "help" | "--help" | "-h" => print_usage(),
         "demo" => run_demo(),
         "init" => {
             let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
@@ -111,7 +169,7 @@ fn main() {
                 .map(|s| TargetLanguage::from_str_loose(s))
                 .unwrap_or(TargetLanguage::Rust);
             match init_workspace(Path::new(dir), project_name, lang) {
-                Ok(manifest) => println!("{}", serde_json::to_string_pretty(&manifest).unwrap()),
+                Ok(manifest) => print_json(&manifest),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -122,7 +180,7 @@ fn main() {
             let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             let mut machine = load_or_seed_machine(Some(dir));
             match machine.scan_intake_directory(Path::new(dir)) {
-                Ok(cert) => println!("{}", serde_json::to_string_pretty(&cert).unwrap()),
+                Ok(cert) => print_json(&cert),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -133,8 +191,21 @@ fn main() {
             let dir_str = args.get(2).map(|s| s.as_str()).unwrap_or("./generated-app");
             let target_dir = Path::new(dir_str);
             let lang = args.get(3).map(|s| TargetLanguage::from_str_loose(s));
-            let manifest = load_manifest_from_workspace(target_dir)
-                .unwrap_or_else(|_| CarnotMachine::new_seeded().manifest);
+            if !target_dir.join("carnot.manifest.json").is_file() {
+                eprintln!(
+                    "No carnot.manifest.json in '{}'. Run `carnot init {} <name> [lang]` first.",
+                    target_dir.display(),
+                    dir_str
+                );
+                std::process::exit(1);
+            }
+            let manifest = match load_manifest_from_workspace(target_dir) {
+                Ok(manifest) => manifest,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
             match materialize_project_to_disk(&manifest, target_dir, lang, true) {
                 Ok(plan) => {
                     println!(
@@ -182,12 +253,13 @@ fn main() {
             let regressions_jsonl_path =
                 ws_dir.map(|d| WorkspaceLayout::at(Path::new(d)).regressions_jsonl);
 
+            let listen_addr = listener
+                .local_addr()
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|_| listen_str.to_string());
             println!(
                 "Carnot Strangler-Fig Reverse Proxy listening on http://{} -> control={} | canary={} ({}%)",
-                listener.local_addr().unwrap(),
-                control_upstream,
-                canary_upstream,
-                canary_pct
+                listen_addr, control_upstream, canary_upstream, canary_pct
             );
 
             let cfg = ProxyConfig {
@@ -219,7 +291,7 @@ fn main() {
             }
             let lang = args.get(3).map(|s| TargetLanguage::from_str_loose(s));
             match machine.run_scout(lang) {
-                Ok(ranked) => println!("{}", serde_json::to_string_pretty(&ranked).unwrap()),
+                Ok(ranked) => print_json(&ranked),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -230,18 +302,18 @@ fn main() {
             let mut machine = load_or_seed_machine(None);
             let lang = args.get(2).map(|s| TargetLanguage::from_str_loose(s));
             let plan = machine.preview_target_build(lang);
-            println!("{}", serde_json::to_string_pretty(&plan).unwrap());
+            print_json(&plan);
         }
         "verify" => {
             let mut machine = load_or_seed_machine(None);
             let summaries = machine.run_evaluations(DatasetSplit::Golden);
-            println!("{}", serde_json::to_string_pretty(&summaries).unwrap());
+            print_json(&summaries);
         }
         "point" => {
             let dir = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             let mut machine = load_or_seed_machine(Some(dir));
             match machine.point_target(Path::new(dir)) {
-                Ok(target) => println!("{}", serde_json::to_string_pretty(&target).unwrap()),
+                Ok(target) => print_json(&target),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -297,9 +369,7 @@ fn main() {
 
             for n in 0..tick_count {
                 match machine.daemon_tick(None) {
-                    Ok(report) => {
-                        println!("{}", serde_json::to_string_pretty(&report).unwrap())
-                    }
+                    Ok(report) => print_json(&report),
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(1);
@@ -336,7 +406,7 @@ fn main() {
                 explicit_candidate: None,
                 organ_rel_path: None,
             }) {
-                Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
+                Ok(report) => print_json(&report),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -365,7 +435,7 @@ fn main() {
             let ws = args.get(4).map(|s| s.as_str());
             let mut machine = load_or_seed_machine(ws);
             match machine.decide_proposal(proposal_id, decision) {
-                Ok(card) => println!("{}", serde_json::to_string_pretty(&card).unwrap()),
+                Ok(card) => print_json(&card),
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -392,8 +462,20 @@ fn main() {
             let ws = args.get(3).map(|s| s.as_str());
             let mut machine = load_or_seed_machine(ws);
             let out = match action {
-                "on" => serde_json::to_value(machine.set_black_box_mode(true)).unwrap(),
-                "off" => serde_json::to_value(machine.set_black_box_mode(false)).unwrap(),
+                "on" => match serde_json::to_value(machine.set_black_box_mode(true)) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        eprintln!("Failed to serialize black-box state: {e}");
+                        std::process::exit(1);
+                    }
+                },
+                "off" => match serde_json::to_value(machine.set_black_box_mode(false)) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        eprintln!("Failed to serialize black-box state: {e}");
+                        std::process::exit(1);
+                    }
+                },
                 "status" => serde_json::json!({
                     "black_box_enforced": machine.manifest.black_box_enforced,
                     "certificate_receipt_id": machine.clean_room_cert.receipt_id,
@@ -404,7 +486,7 @@ fn main() {
                     std::process::exit(2);
                 }
             };
-            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            print_json(&out);
         }
         "search" => {
             let Some(query) = args.get(2) else {
@@ -418,7 +500,7 @@ fn main() {
                 .unwrap_or(5);
             let machine = machine_rooted_at(dir);
             let rep = machine.search_codebase(query, top_k);
-            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            print_json(&rep);
         }
         "related" => {
             let (Some(file), Some(line)) = (
@@ -435,38 +517,29 @@ fn main() {
                 .unwrap_or(5);
             let machine = machine_rooted_at(dir);
             let rep = machine.find_related_code(file, line, top_k);
-            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            print_json(&rep);
         }
         "hotspots" => {
             let goal = args.get(2).map(|s| s.as_str()).unwrap_or("");
             let dir = args.get(3).map(|s| s.as_str()).unwrap_or(".");
             let machine = machine_rooted_at(dir);
             let rep = machine.scan_hotspots(goal);
-            println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            print_json(&rep);
         }
         "advise" => {
             let machine = load_or_seed_machine(args.get(2).map(|s| s.as_str()));
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&machine.advise_languages()).unwrap()
-            );
+            print_json(&machine.advise_languages());
         }
         "obligations" => {
             let mut machine = load_or_seed_machine(args.get(2).map(|s| s.as_str()));
             let verdict = machine.evaluate_obligations();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "verdict": verdict,
-                    "ledger": machine.obligations,
-                }))
-                .unwrap()
-            );
+            print_json(&serde_json::json!({
+                "verdict": verdict,
+                "ledger": machine.obligations,
+            }));
         }
         _ => {
-            eprintln!(
-                "Usage: carnot [init <dir> [name] [lang] | intake-scan <dir> | generate <dir> [lang] | proxy <listen> <control> <canary> [pct] [ws] | app [host:port] [ws] | serve [host:port] [ws] | demo | scout [dir] [lang] | build-plan [lang] | point <dir> | daemon [--once | --ticks N] [ws] | evolve [organ] [gens] [--demo] [--apply] | proposal <accept|decline|undo> <proposal_id> [ws] | verify | mcp [ws] | black-box <on|off|status> [ws] | search <query> [dir] [top_k] | related <file> <line> [dir] [top_k] | hotspots [goal] [dir] | advise [ws] | obligations [ws]]"
-            );
+            print_usage();
             std::process::exit(2);
         }
     }
@@ -474,16 +547,35 @@ fn main() {
 
 /// Loads the workspace at `dir` if it has a manifest; otherwise a seeded machine whose
 /// read-only search root is `dir` (search/hotspot commands never flush state).
+/// Loads the workspace at `dir` if it has a manifest. Otherwise scans `dir` for
+/// SPDX zones on an unbound demo machine so search/hotspots honor the firewall.
+/// `workspace_root` is set only after the scan, because `scan_intake_directory`
+/// flushes when a root is already bound. Callers must not flush this machine
+/// or the demo fixtures will be written into `dir`.
 fn machine_rooted_at(dir: &str) -> CarnotMachine {
     let p = Path::new(dir);
-    if p.join("carnot.manifest.json").exists() {
-        if let Ok(m) = CarnotMachine::from_workspace(p) {
-            return m;
+    if p.join("carnot.manifest.json").is_file() {
+        match CarnotMachine::from_workspace(p) {
+            Ok(machine) => return machine,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
     }
-    let mut m = CarnotMachine::new_seeded();
-    m.workspace_root = Some(p.to_path_buf());
-    m
+    let mut machine = CarnotMachine::new_seeded();
+    if p.is_dir() {
+        let _ = machine.scan_intake_directory(p);
+    }
+    // Drop demo fixtures before publishing a root. Search does not flush; if a
+    // later edit does, it must not write prop-001 / gold-001 into `dir`.
+    machine.shell.proposals.clear();
+    machine.dataset.clear();
+    machine.scout_candidates.clear();
+    machine.latest_scout_ranking.clear();
+    machine.evidence = carnot::evidence::EvidenceLedger::new();
+    machine.workspace_root = Some(p.to_path_buf());
+    machine
 }
 
 fn run_demo() {
@@ -510,9 +602,13 @@ fn run_demo() {
     );
 
     println!("\n[Stage 1/5: SCOUT] Ranking source organs against PreferenceProfile:");
-    let ranked = machine
-        .run_scout(Some(TargetLanguage::AutoShootout))
-        .unwrap();
+    let ranked = match machine.run_scout(Some(TargetLanguage::AutoShootout)) {
+        Ok(ranked) => ranked,
+        Err(e) => {
+            eprintln!("demo scout failed: {e}");
+            std::process::exit(1);
+        }
+    };
     for r in &ranked {
         println!(
             "  • {:<28} eff={:>5.1}% | mode={:<35} | targets={:?}",
@@ -521,7 +617,13 @@ fn run_demo() {
     }
 
     println!("\n[Stage 2/5: INTAKE FIREWALL] Exporting SHA-256 Clean-Room IP Certificate:");
-    let cert = machine.export_clean_room_certificate().unwrap();
+    let cert = match machine.export_clean_room_certificate() {
+        Ok(cert) => cert,
+        Err(e) => {
+            eprintln!("demo certificate failed: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("  • Receipt ID:          {}", cert.receipt_id);
     println!("  • Certificate SHA-256: {}", cert.certificate_sha256);
     println!(
@@ -567,9 +669,13 @@ fn run_demo() {
     if let Err(blocked) = machine.promote_canary("v3-unverified-draft", 25) {
         println!("  • [BLOCKED] {}", blocked);
     }
-    let promoted = machine
-        .promote_canary("v2-carnot-consolidated", 25)
-        .expect("Pareto winner passes GatePolicy");
+    let promoted = match machine.promote_canary("v2-carnot-consolidated", 25) {
+        Ok(promoted) => promoted,
+        Err(e) => {
+            eprintln!("demo promote failed: {e}");
+            std::process::exit(1);
+        }
+    };
     println!(
         "  • [PROMOTED] '{}' serving {}% canary on '{}'",
         promoted.canary_variant_id.as_deref().unwrap_or(""),
@@ -577,9 +683,18 @@ fn run_demo() {
         promoted.flag_name
     );
 
-    let _healthy = machine.simulate_live_traffic(24, false).unwrap();
+    if let Err(e) = machine.simulate_live_traffic(24, false) {
+        eprintln!("demo traffic failed: {e}");
+        std::process::exit(1);
+    }
     let t0 = std::time::Instant::now();
-    let tripped = machine.simulate_live_traffic(36, true).unwrap();
+    let tripped = match machine.simulate_live_traffic(36, true) {
+        Ok(tripped) => tripped,
+        Err(e) => {
+            eprintln!("demo kill-switch failed: {e}");
+            std::process::exit(1);
+        }
+    };
     let elapsed_us = t0.elapsed().as_micros();
     println!(
         "  • [KILL-SWITCH] Tripped={} in {} us | Active canary={}% | Regressions captured={} | Receipt={}",

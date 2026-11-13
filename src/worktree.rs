@@ -22,7 +22,7 @@ use crate::evolve::{
 };
 use crate::prune::{audit_source_entropy, SourceEntropyBudget};
 use crate::recipe::OrganSpec;
-use crate::workspace::{append_jsonl, WorkspaceLayout};
+use crate::workspace::{append_jsonl, resolve_contained_path, WorkspaceLayout};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
@@ -186,7 +186,8 @@ pub fn run_git_worktree_trial_secured(
         purge_quarantined_paths(&wt_dir, &security.quarantined_rel_paths);
     }
 
-    let wt_organ_path = wt_dir.join(req.organ_rel_path);
+    let wt_organ_path = resolve_contained_path(&wt_dir, req.organ_rel_path)
+        .map_err(|e| format!("Organ path rejected: {e}"))?;
     let original_source = fs::read_to_string(&wt_organ_path).map_err(|e| {
         format!(
             "Failed to read organ file '{}' in worktree: {}",
@@ -426,7 +427,7 @@ pub fn run_git_worktree_trial_secured(
     {
         match security.promote_mode {
             PromoteMode::AutoRatchet => {
-                let primary_organ_path = req.repo_dir.join(req.organ_rel_path);
+                let primary_organ_path = resolve_contained_path(req.repo_dir, req.organ_rel_path)?;
                 fs::write(&primary_organ_path, &spliced)
                     .map_err(|e| format!("Failed to ratchet primary organ file: {}", e))?;
                 ratcheted_baseline = true;
@@ -465,20 +466,18 @@ pub fn run_git_worktree_trial_secured(
             }
             PromoteMode::StageOnly => {
                 let staged_rel = format!(".carnot/staged/{}", trial_id);
-                let staged_root = req.repo_dir.join(&staged_rel);
-                if let Some(parent) = staged_root.join(req.organ_rel_path).parent() {
+                let staged_organ = resolve_contained_path(
+                    req.repo_dir,
+                    &format!("{staged_rel}/{}", req.organ_rel_path),
+                )?;
+                if let Some(parent) = staged_organ.parent() {
                     fs::create_dir_all(parent)
                         .map_err(|e| format!("Failed to create staged dir: {}", e))?;
-                } else {
-                    fs::create_dir_all(&staged_root)
-                        .map_err(|e| format!("Failed to create staged dir: {}", e))?;
-                }
-                let staged_organ = staged_root.join(req.organ_rel_path);
-                if let Some(parent) = staged_organ.parent() {
-                    fs::create_dir_all(parent).ok();
                 }
                 fs::write(&staged_organ, &spliced)
                     .map_err(|e| format!("Failed to write staged organ: {}", e))?;
+                let meta_path =
+                    resolve_contained_path(req.repo_dir, &format!("{staged_rel}/meta.json"))?;
                 let meta = json!({
                     "trial_id": trial_id,
                     "organ_id": req.organ.id,
@@ -487,7 +486,7 @@ pub fn run_git_worktree_trial_secured(
                     "achieved_objective": candidate_eval.raw_objective,
                     "candidate_body": candidate_code,
                 });
-                fs::write(staged_root.join("meta.json"), meta.to_string())
+                fs::write(&meta_path, meta.to_string())
                     .map_err(|e| format!("Failed to write staged meta: {}", e))?;
                 staged_rel_dir = Some(staged_rel.clone());
 
@@ -566,16 +565,13 @@ pub fn run_git_worktree_trial_secured(
 }
 
 fn purge_quarantined_paths(wt_dir: &Path, quarantined_rel_paths: &[String]) {
-    let default_quarantine = wt_dir.join(".carnot").join("quarantine");
-    if default_quarantine.exists() {
-        let _ = fs::remove_dir_all(&default_quarantine);
-    }
-    for rel in quarantined_rel_paths {
-        let clean = rel.trim_start_matches(['/', '\\']);
-        if clean.is_empty() || clean.contains("..") {
+    let mut rels = vec![".carnot/quarantine".to_string()];
+    rels.extend(quarantined_rel_paths.iter().cloned());
+    for rel in rels {
+        let Ok(target) = resolve_contained_path(wt_dir, &rel) else {
             continue;
-        }
-        let target = wt_dir.join(clean);
+        };
+        // `is_dir` follows symlinks; `resolve_contained_path` already rejected those.
         if target.is_dir() {
             let _ = fs::remove_dir_all(&target);
         } else if target.is_file() {

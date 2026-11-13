@@ -9,13 +9,22 @@ use carnot::evolve::{
 use carnot::recipe::OrganSpec;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temp_dir(tag: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let p = std::env::temp_dir().join(format!("carnot_{}_{}_{}", tag, std::process::id(), nanos));
+    let p = std::env::temp_dir().join(format!(
+        "carnot_{}_{}_{}_{}",
+        tag,
+        std::process::id(),
+        nanos,
+        seq
+    ));
     fs::create_dir_all(&p).unwrap();
     p
 }

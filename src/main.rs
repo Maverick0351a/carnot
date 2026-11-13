@@ -406,7 +406,12 @@ fn main() {
                 explicit_candidate: None,
                 organ_rel_path: None,
             }) {
-                Ok(report) => print_json(&report),
+                Ok(report) => {
+                    if report.offline_demo {
+                        eprintln!("offline demo (seeded islands); not a live worktree trial");
+                    }
+                    print_json(&report);
+                }
                 Err(e) => {
                     eprintln!("{}", e);
                     std::process::exit(1);

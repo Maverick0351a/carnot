@@ -396,18 +396,27 @@ fn walk_repo_files(
             .to_string_lossy()
             .replace('\\', "/");
 
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        // Never follow symlinks: an in-tree link is covered by its real path,
+        // and a link out of the repo must not be indexed.
+        if ft.is_symlink() {
+            continue;
+        }
+
         if black_box_enforced
             && quarantined_prefixes
                 .iter()
-                .any(|qp| rel.starts_with(qp.trim_matches('/')))
+                .any(|qp| crate::intake::rel_matches_quarantine_prefix(&rel, qp))
         {
-            if path.is_file() {
+            if ft.is_file() {
                 *quarantined_skipped += 1;
             }
             continue;
         }
 
-        if path.is_dir() {
+        if ft.is_dir() {
             walk_repo_files(
                 root,
                 &path,

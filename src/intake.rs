@@ -165,7 +165,19 @@ fn permissive_grant_present(text: &str, spdx: &str) -> bool {
 }
 
 pub fn classify_license_text(text: &str) -> String {
-    let classified = spdx_from_license_field(text);
+    // GPL-3 section 13 cites the Affero GPL, and the preamble says "proprietary".
+    // Classify from the header so those citations do not replace the title.
+    let upper = text.to_ascii_uppercase();
+    let head = if let Some(idx) = upper.find("TERMS AND CONDITIONS") {
+        &text[..idx]
+    } else {
+        let mut end = text.len().min(4000);
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        &text[..end]
+    };
+    let classified = spdx_from_license_field(head);
     // A long notice that only mentions a permissive name, without the grant
     // phrase, is not that license. Restrictive ids are unchanged.
     if is_permissive_spdx(&classified)
@@ -186,6 +198,27 @@ pub fn classify_license_text(text: &str) -> String {
         return "PROPRIETARY-EULA".to_string();
     }
     "UNKNOWN".to_string()
+}
+
+/// True when `rel` is exactly `prefix` or a path beneath it.
+/// A zone named `ranger` must not match the sibling file `ranger.py`.
+pub fn rel_matches_quarantine_prefix(rel: &str, prefix: &str) -> bool {
+    let rel = rel.trim_start_matches(['/', '\\']);
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return false;
+    }
+    let rel_norm;
+    let rel_ref: &str = if rel.contains('\\') {
+        rel_norm = rel.replace('\\', "/");
+        &rel_norm
+    } else {
+        rel
+    };
+    rel_ref == prefix
+        || rel_ref
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 pub fn policy_for_spdx(spdx: &str) -> AccessPolicy {
@@ -291,53 +324,82 @@ pub fn build_clean_room_certificate_full(
 pub fn scan_directory_spdx_zones(
     root: &std::path::Path,
 ) -> std::io::Result<Vec<IntakeZoneDecision>> {
+    let root_meta = std::fs::symlink_metadata(root)?;
+    if root_meta.file_type().is_symlink() {
+        let target = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to scan symlink '{}' -> '{}'; pass a real directory",
+                root.display(),
+                target.display()
+            ),
+        ));
+    }
+
     let mut candidate_dirs = Vec::new();
+    let mut root_files = Vec::new();
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || name == "target" || name == "node_modules" {
             continue;
         }
-        if entry.file_type()?.is_dir() {
-            candidate_dirs.push((name, entry.path()));
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            guard_symlink(root, &path)?;
+            continue;
+        }
+        if ft.is_dir() {
+            candidate_dirs.push((name, path));
+        } else if ft.is_file() {
+            root_files.push((name, path));
         }
     }
-    if candidate_dirs.is_empty() {
+    let root_spdx = detect_zone_spdx(root, root)?;
+    let mut decisions = Vec::new();
+
+    for (alias, path) in candidate_dirs {
+        let local = detect_zone_spdx(root, &path)?;
+        let zone_spdx = if local == "UNKNOWN" && path != root {
+            root_spdx.clone()
+        } else {
+            local
+        };
+        let policy = policy_for_spdx(&zone_spdx);
+        let (code_count, fixture_count, vectors_count) =
+            count_zone_files_and_permissive_vectors(root, &path, policy)?;
+        decisions.push(zone_decision(
+            alias,
+            zone_spdx,
+            policy,
+            code_count,
+            fixture_count,
+            vectors_count,
+        ));
+    }
+
+    // Files that sit beside subdirectories (or are the whole tree) are not inside
+    // a child zone. One zone per file keeps the quarantine prefix equal to the
+    // relative path, so `setup.py` is not missed and `ranger` does not have to
+    // prefix-match `ranger.py`.
+    // Source files only. A LICENSE or manifest next to them stays a classifier
+    // input, not its own zone, so a flat tree still reports the code files.
+    let root_policy = policy_for_spdx(&root_spdx);
+    for (name, _path) in root_files {
+        if !matches!(source_or_fixture_kind(&name), Some(FileKind::Code)) {
+            continue;
+        }
+        decisions.push(zone_decision(name, root_spdx.clone(), root_policy, 1, 0, 0));
+    }
+
+    if decisions.is_empty() {
         let alias = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "root".to_string());
-        candidate_dirs.push((alias, root.to_path_buf()));
-    }
-
-    let root_spdx = detect_zone_spdx(root);
-    let mut decisions = Vec::new();
-
-    for (alias, path) in candidate_dirs {
-        let zone_spdx = {
-            let local = detect_zone_spdx(&path);
-            if local == "UNKNOWN" && path != root {
-                root_spdx.clone()
-            } else {
-                local
-            }
-        };
-        let policy = policy_for_spdx(&zone_spdx);
-        let (code_count, fixture_count, vectors_count) =
-            count_zone_files_and_permissive_vectors(&path, policy);
-        let (source_files_blocked, spec_fixtures_harvested) = match policy {
-            AccessPolicy::PermissiveAlgorithmAndFixtures => (0, fixture_count + code_count),
-            AccessPolicy::BoundaryInterfaceOnly => (code_count, fixture_count),
-            AccessPolicy::QuarantinedBlackBoxSpecOnly => (code_count, 0),
-        };
-        decisions.push(IntakeZoneDecision {
-            zone_alias: alias,
-            detected_spdx: zone_spdx,
-            policy,
-            source_files_blocked,
-            spec_fixtures_harvested,
-            conformance_vectors_counted: vectors_count,
-        });
+        decisions.push(zone_decision(alias, root_spdx, root_policy, 0, 0, 0));
     }
 
     Ok(decisions)
@@ -362,6 +424,29 @@ fn manifest_license_value(line: &str) -> Option<String> {
         None
     } else {
         Some(value.to_string())
+    }
+}
+
+fn zone_decision(
+    alias: String,
+    zone_spdx: String,
+    policy: AccessPolicy,
+    code_count: usize,
+    fixture_count: usize,
+    vectors_count: usize,
+) -> IntakeZoneDecision {
+    let (source_files_blocked, spec_fixtures_harvested) = match policy {
+        AccessPolicy::PermissiveAlgorithmAndFixtures => (0, fixture_count + code_count),
+        AccessPolicy::BoundaryInterfaceOnly => (code_count, fixture_count),
+        AccessPolicy::QuarantinedBlackBoxSpecOnly => (code_count, 0),
+    };
+    IntakeZoneDecision {
+        zone_alias: alias,
+        detected_spdx: zone_spdx,
+        policy,
+        source_files_blocked,
+        spec_fixtures_harvested,
+        conformance_vectors_counted: vectors_count,
     }
 }
 
@@ -413,7 +498,7 @@ pub fn detect_manifest_spdx(dir: &std::path::Path) -> String {
 
 // shortcut: a zone's license is the directory LICENSE/COPYING file or manifest
 // field, not per-file SPDX headers. Upgrade when one directory mixes licenses.
-fn detect_zone_spdx(dir: &std::path::Path) -> String {
+fn detect_zone_spdx(root: &std::path::Path, dir: &std::path::Path) -> std::io::Result<String> {
     let license_names = [
         "LICENSE",
         "LICENSE.md",
@@ -424,29 +509,99 @@ fn detect_zone_spdx(dir: &std::path::Path) -> String {
     ];
     for lname in license_names {
         let p = dir.join(lname);
-        if p.is_file() {
-            if let Ok(txt) = std::fs::read_to_string(&p) {
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            guard_symlink(root, &p)?;
+        }
+        if !meta.file_type().is_file() && !meta.file_type().is_symlink() {
+            continue;
+        }
+        match std::fs::read_to_string(&p) {
+            Ok(txt) => {
                 let classified = classify_license_text(&txt);
                 if classified != "UNKNOWN" {
-                    return classified;
+                    return Ok(classified);
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("cannot read license file '{}': {}", p.display(), e),
+                ));
+            }
+            Err(_) => continue,
         }
     }
-    detect_manifest_spdx(dir)
+    Ok(detect_manifest_spdx(dir))
+}
+
+enum FileKind {
+    Code,
+    Fixture,
+}
+
+fn source_or_fixture_kind(name: &str) -> Option<FileKind> {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())?;
+    match ext {
+        "rs" | "go" | "py" | "ts" | "js" | "mjs" | "scala" | "zig" | "c" | "cpp" => {
+            Some(FileKind::Code)
+        }
+        "json" | "toml" | "yaml" | "yml" => Some(FileKind::Fixture),
+        _ => None,
+    }
+}
+
+/// In-repo symlinks are left for their real path to cover. A symlink that
+/// resolves outside `root` is an error so the scan cannot silently count or
+/// read another tree.
+fn guard_symlink(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::canonicalize(path) {
+        Ok(target) => {
+            let root_canon = std::fs::canonicalize(root)?;
+            if !target.starts_with(&root_canon) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "refusing to follow symlink '{}' -> '{}' because it points outside '{}'",
+                        path.display(),
+                        target.display(),
+                        root.display()
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(std::io::Error::new(
+            e.kind(),
+            format!("cannot resolve symlink '{}': {}", path.display(), e),
+        )),
+    }
 }
 
 fn count_zone_files_and_permissive_vectors(
+    root: &std::path::Path,
     dir: &std::path::Path,
     policy: AccessPolicy,
-) -> (usize, usize, usize) {
+) -> std::io::Result<(usize, usize, usize)> {
     let mut code = 0usize;
     let mut fixtures = 0usize;
     let mut vectors = 0usize;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(cur) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&cur) else {
-            continue;
+        let rd = match std::fs::read_dir(&cur) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("cannot read directory '{}': {}", cur.display(), e),
+                ));
+            }
+            Err(_) => continue,
         };
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -454,26 +609,29 @@ fn count_zone_files_and_permissive_vectors(
                 continue;
             }
             let p = entry.path();
-            if p.is_dir() {
+            let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                guard_symlink(root, &p)?;
+                continue;
+            }
+            if ft.is_dir() {
                 stack.push(p);
-            } else if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                match ext {
-                    "rs" | "go" | "py" | "ts" | "js" | "mjs" | "scala" | "zig" | "c" | "cpp" => {
-                        code += 1;
-                    }
-                    "json" | "toml" | "yaml" | "yml" => {
+            } else if ft.is_file() {
+                match source_or_fixture_kind(&name) {
+                    Some(FileKind::Code) => code += 1,
+                    Some(FileKind::Fixture) => {
                         fixtures += 1;
-                        if ext == "json"
+                        if name.ends_with(".json")
                             && policy != AccessPolicy::QuarantinedBlackBoxSpecOnly
                             && !name.eq_ignore_ascii_case("index.json")
                         {
                             vectors += crate::scout::count_json_conformance_vectors(&p);
                         }
                     }
-                    _ => {}
+                    None => {}
                 }
             }
         }
     }
-    (code, fixtures, vectors)
+    Ok((code, fixtures, vectors))
 }

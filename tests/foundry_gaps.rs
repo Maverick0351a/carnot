@@ -261,7 +261,19 @@ fn scout_and_verify_score_the_tree_unless_demo() {
     let verify_text = String::from_utf8_lossy(&verify.stdout);
     let verify_json: Value = serde_json::from_str(&verify_text).unwrap();
     assert_eq!(verify_json["demo"], false);
-    assert!(verify_text.contains("kept.py"), "{verify_text}");
+    assert_eq!(verify_json["checks_executed"], false);
+    assert_eq!(verify_json["summaries"][0]["schema_pass_rate"], 0.0);
+    assert_eq!(verify_json["summaries"][0]["pareto_optimal"], false);
+    assert!(verify_json["summaries"][0]["case_scores"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(
+        verify_json["source_files"].to_string().contains("kept.py"),
+        "{verify_text}"
+    );
+    let verify_err = String::from_utf8_lossy(&verify.stderr);
+    assert!(verify_err.contains("tests were not run"), "{verify_err}");
     assert!(!verify_text.contains("gold-001"), "{verify_text}");
     assert!(!verify_text.contains("v1-legacy-baseline"), "{verify_text}");
 

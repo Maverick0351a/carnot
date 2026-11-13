@@ -79,7 +79,7 @@ Usage:
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
 `carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names.
-`carnot scout` and `carnot verify` score the directory you pass (or `.`). `--demo` is the seeded set and is labeled in the output.
+`carnot scout` scores the directory you pass (or `.`). `carnot verify` inventories that tree and does not mark files as passing. `--demo` is the seeded set and is labeled in the output.
 `carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`.
 Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
@@ -364,10 +364,13 @@ fn main() {
                 eprintln!("offline demo (seeded golden set); not a score of the pointed workspace");
                 print_json(&carnot::bridge::VerifyCommandReport {
                     demo: true,
+                    checks_executed: true,
                     workspace: None,
+                    source_files: Vec::new(),
                     summaries,
                 });
             } else {
+                eprintln!("inventory of the pointed tree; tests were not run");
                 let dir = dir.unwrap_or(".");
                 let mut machine = CarnotMachine::new_seeded();
                 match machine.verify_pointed(Path::new(dir)) {

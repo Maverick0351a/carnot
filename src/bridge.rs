@@ -16,8 +16,8 @@ use crate::daemon::{
     DaemonPolicy, DaemonTickReport, PointedTarget, PromoteMode, TrialBudgetState,
 };
 use crate::eval::{
-    evaluate_variants, synthesize_dataset_cases, CaseEvalScore, DatasetCase, DatasetSplit,
-    PromptVariant, VariantCapability, VariantEvalSummary,
+    evaluate_variants, synthesize_dataset_cases, DatasetCase, DatasetSplit, PromptVariant,
+    VariantCapability, VariantEvalSummary,
 };
 use crate::evidence::{EvidenceKind, EvidenceLedger};
 use crate::evolve::{
@@ -187,10 +187,15 @@ pub struct CarnotMachine {
 }
 
 /// CLI/library verify result. `demo` is true only for the seeded golden set.
+/// `checks_executed` is true only when an evaluator ran. A pointed tree is an
+/// inventory (`source_files` plus a signal score), not a test pass.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyCommandReport {
     pub demo: bool,
     pub workspace: Option<String>,
+    pub checks_executed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<String>,
     pub summaries: Vec<VariantEvalSummary>,
 }
 
@@ -1744,7 +1749,8 @@ impl CarnotMachine {
         })
     }
 
-    /// Score source files in `dir`. The golden rows from `new_seeded` are not used.
+    /// Inventory the source files in `dir` and score that inventory.
+    /// Does not run the tree's tests and does not mark files as passing.
     pub fn verify_pointed(&mut self, dir: &Path) -> Result<VerifyCommandReport, String> {
         if !dir.is_dir() {
             return Err(format!(
@@ -1763,40 +1769,29 @@ impl CarnotMachine {
             .first()
             .map(|row| row.total_carnot_efficiency / 100.0)
             .unwrap_or(0.0);
-        let paths = list_code_rel_paths(dir, 48);
-        let case_scores: Vec<CaseEvalScore> = paths
-            .iter()
-            .map(|rel| CaseEvalScore {
-                case_id: rel.clone(),
-                json_schema_pass: true,
-                substring_pass: true,
-                tool_call_pass: true,
-                g_eval_norm: 0.0,
-                critical_failure: false,
-                composite: 1.0,
-            })
-            .collect();
-        let cases_evaluated = case_scores.len();
+        let source_files = list_code_rel_paths(dir, 48);
         let summary = VariantEvalSummary {
             variant_id: alias,
-            variant_name: "pointed workspace".to_string(),
-            model: "workspace-files".to_string(),
+            variant_name: "pointed workspace inventory".to_string(),
+            model: "inventory".to_string(),
             split: DatasetSplit::Golden,
-            cases_evaluated,
-            schema_pass_rate: if cases_evaluated == 0 { 0.0 } else { 1.0 },
-            tool_call_pass_rate: if cases_evaluated == 0 { 0.0 } else { 1.0 },
+            cases_evaluated: source_files.len(),
+            schema_pass_rate: 0.0,
+            tool_call_pass_rate: 0.0,
             mean_g_eval: 0.0,
             composite_score: composite,
             critical_failures: 0,
             p95_latency_ms: 0,
             cost_per_1k_usd: 0.0,
-            pareto_optimal: true,
-            case_scores,
+            pareto_optimal: false,
+            case_scores: Vec::new(),
         };
         self.latest_evals = vec![summary.clone()];
         Ok(VerifyCommandReport {
             demo: false,
+            checks_executed: false,
             workspace: Some(dir.display().to_string()),
+            source_files,
             summaries: vec![summary],
         })
     }

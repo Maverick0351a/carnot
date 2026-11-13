@@ -75,7 +75,7 @@ fn mixed_license_expression_is_classified_as_restrictive() {
         "[package]\nname = \"copyleft\"\nlicense = \"GPL-3.0-only\"\n",
     )
     .unwrap();
-    assert_eq!(detect_manifest_spdx(&gpl), "GPL-3.0");
+    assert_eq!(detect_manifest_spdx(&gpl), "GPL-3.0-only");
     assert_eq!(
         policy_for_spdx(&detect_manifest_spdx(&gpl)),
         AccessPolicy::QuarantinedBlackBoxSpecOnly

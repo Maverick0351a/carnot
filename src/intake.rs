@@ -57,52 +57,154 @@ fn has_license_token(upper: &str, token: &str) -> bool {
         .any(|part| part == token)
 }
 
-/// Most restrictive SPDX id found in a license field or short license text.
-/// Permissive ids are returned only when no restrictive id is present.
-pub fn spdx_from_license_field(field: &str) -> String {
-    let upper = field.to_ascii_uppercase();
-    if upper.contains("AFFERO") || has_license_token(&upper, "AGPL") {
-        return "AGPL-3.0".to_string();
+fn spdx_tokens(field: &str) -> impl Iterator<Item = &str> {
+    field
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+'))
+        .filter(|token| !token.is_empty())
+}
+
+/// Canonical SPDX id for one token, plus a restrictiveness rank (lower wins).
+fn canonical_spdx_token(token: &str) -> Option<(u8, String)> {
+    let lower = token.to_ascii_lowercase();
+    let (base, suffix): (String, &str) = if let Some(b) = lower.strip_suffix("-or-later") {
+        (b.to_string(), "-or-later")
+    } else if let Some(b) = lower.strip_suffix("-only") {
+        (b.to_string(), "-only")
+    } else {
+        (lower, "")
+    };
+    let (rank, canon) = match base.as_str() {
+        "agpl-3.0" | "agpl-3" | "agplv3" => (0u8, "AGPL-3.0"),
+        "sspl-1.0" => (1, "SSPL-1.0"),
+        "gpl-2.0" | "gpl-2" | "gplv2" => (2, "GPL-2.0"),
+        "gpl-3.0" | "gpl-3" | "gplv3" => (2, "GPL-3.0"),
+        "lgpl-2.0" | "lgpl-2" | "lgplv2" => (3, "LGPL-2.0"),
+        "lgpl-2.1" => (3, "LGPL-2.1"),
+        "lgpl-3.0" | "lgpl-3" | "lgplv3" => (3, "LGPL-3.0"),
+        "bsl-1.1" => (4, "BSL-1.1"),
+        "mpl-2.0" | "mpl-2" => (5, "MPL-2.0"),
+        "apache-2.0" | "apache-2" => (6, "Apache-2.0"),
+        "bsd-3-clause" | "bsd-3" => (7, "BSD-3-Clause"),
+        "bsd-2-clause" | "bsd-2" => (7, "BSD-2-Clause"),
+        "mit" => (8, "MIT"),
+        "isc" => (9, "ISC"),
+        _ => return None,
+    };
+    let keep_suffix = !suffix.is_empty()
+        && (canon.starts_with("GPL") || canon.starts_with("AGPL") || canon.starts_with("LGPL"));
+    let id = if keep_suffix {
+        format!("{canon}{suffix}")
+    } else {
+        canon.to_string()
+    };
+    Some((rank, id))
+}
+
+fn most_restrictive_spdx_token(field: &str) -> Option<String> {
+    let mut best: Option<(u8, String)> = None;
+    for token in spdx_tokens(field) {
+        let Some((rank, id)) = canonical_spdx_token(token) else {
+            continue;
+        };
+        let replace = match &best {
+            Some((best_rank, _)) => rank < *best_rank,
+            None => true,
+        };
+        if replace {
+            best = Some((rank, id));
+        }
     }
-    if upper.contains("SERVER SIDE PUBLIC") || has_license_token(&upper, "SSPL") {
+    best.map(|(_, id)| id)
+}
+
+fn first_version_number(upper: &str) -> Option<String> {
+    let idx = upper.find("VERSION ")?;
+    let rest = &upper[idx + "VERSION ".len()..];
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if num.is_empty() {
+        None
+    } else {
+        Some(num)
+    }
+}
+
+fn gpl_family_version(upper: &str) -> &'static str {
+    match first_version_number(upper).as_deref() {
+        Some(v) if v.starts_with('2') => "2.0",
+        Some(v) if v.starts_with('3') => "3.0",
+        _ => "3.0",
+    }
+}
+
+fn lgpl_family_version(upper: &str) -> &'static str {
+    match first_version_number(upper).as_deref() {
+        Some(v) if v.starts_with("2.1") => "2.1",
+        Some(v) if v.starts_with('2') => "2.0",
+        Some(v) if v.starts_with('3') => "3.0",
+        _ => "3.0",
+    }
+}
+
+fn title_spdx(upper: &str) -> String {
+    if upper.contains("AFFERO") || (has_license_token(upper, "AGPL") && !upper.contains('\n')) {
+        return format!("AGPL-{}", gpl_family_version(upper));
+    }
+    if upper.contains("SERVER SIDE PUBLIC") || has_license_token(upper, "SSPL") {
         return "SSPL-1.0".to_string();
     }
-    if upper.contains("LESSER GENERAL PUBLIC") || has_license_token(&upper, "LGPL") {
-        return "LGPL-3.0".to_string();
-    }
-    if upper.contains("GNU GENERAL PUBLIC LICENSE")
-        || upper.contains("GPL-")
-        || has_license_token(&upper, "GPL")
+    if upper.contains("LESSER GENERAL PUBLIC")
+        || upper.contains("LIBRARY GENERAL PUBLIC")
+        || (has_license_token(upper, "LGPL") && !upper.contains('\n'))
     {
-        return "GPL-3.0".to_string();
+        return format!("LGPL-{}", lgpl_family_version(upper));
     }
-    if upper.contains("BUSINESS SOURCE") || has_license_token(&upper, "BSL") {
+    // The full title, not a sentence that merely says "GPL-compatible".
+    if upper.contains("GNU GENERAL PUBLIC LICENSE")
+        || (has_license_token(upper, "GPL") && !upper.contains('\n'))
+    {
+        return format!("GPL-{}", gpl_family_version(upper));
+    }
+    if upper.contains("BUSINESS SOURCE") || has_license_token(upper, "BSL") {
         return "BSL-1.1".to_string();
     }
     if upper.contains("END USER LICENSE")
         || upper.contains("PROPRIETARY")
-        || has_license_token(&upper, "UNLICENSED")
-        || has_license_token(&upper, "EULA")
+        || has_license_token(upper, "UNLICENSED")
+        || has_license_token(upper, "EULA")
     {
         return "PROPRIETARY-EULA".to_string();
     }
-    if upper.contains("MOZILLA PUBLIC LICENSE") || has_license_token(&upper, "MPL") {
+    if upper.contains("MOZILLA PUBLIC LICENSE") || has_license_token(upper, "MPL") {
         return "MPL-2.0".to_string();
     }
     if upper.contains("APACHE") {
         return "Apache-2.0".to_string();
     }
-    if has_license_token(&upper, "MIT") || upper.contains("PERMISSION IS HEREBY GRANTED") {
+    if has_license_token(upper, "MIT") || upper.contains("PERMISSION IS HEREBY GRANTED") {
         return "MIT".to_string();
     }
     if upper.contains("BSD") || upper.contains("REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS")
     {
         return "BSD-3-Clause".to_string();
     }
-    if has_license_token(&upper, "ISC") {
+    if has_license_token(upper, "ISC") {
         return "ISC".to_string();
     }
     "UNKNOWN".to_string()
+}
+
+/// Most restrictive SPDX id found in a license field or short license text.
+/// Manifest tokens keep `-only` / `-or-later`. Full license text is classified
+/// from the title and the first Version line (GPL-2.0 vs GPL-3.0).
+/// Permissive ids are returned only when no restrictive id is present.
+pub fn spdx_from_license_field(field: &str) -> String {
+    if let Some(id) = most_restrictive_spdx_token(field) {
+        return id;
+    }
+    title_spdx(&field.to_ascii_uppercase())
 }
 
 fn is_permissive_spdx(spdx: &str) -> bool {
@@ -222,7 +324,11 @@ pub fn rel_matches_quarantine_prefix(rel: &str, prefix: &str) -> bool {
 }
 
 pub fn policy_for_spdx(spdx: &str) -> AccessPolicy {
-    match spdx {
+    let family = spdx
+        .strip_suffix("-only")
+        .or_else(|| spdx.strip_suffix("-or-later"))
+        .unwrap_or(spdx);
+    match family {
         "MIT" | "Apache-2.0" | "BSD-3-Clause" | "BSD-2-Clause" | "ISC" => {
             AccessPolicy::PermissiveAlgorithmAndFixtures
         }
@@ -361,23 +467,7 @@ pub fn scan_directory_spdx_zones(
     let mut decisions = Vec::new();
 
     for (alias, path) in candidate_dirs {
-        let local = detect_zone_spdx(root, &path)?;
-        let zone_spdx = if local == "UNKNOWN" && path != root {
-            root_spdx.clone()
-        } else {
-            local
-        };
-        let policy = policy_for_spdx(&zone_spdx);
-        let (code_count, fixture_count, vectors_count) =
-            count_zone_files_and_permissive_vectors(root, &path, policy)?;
-        decisions.push(zone_decision(
-            alias,
-            zone_spdx,
-            policy,
-            code_count,
-            fixture_count,
-            vectors_count,
-        ));
+        decisions.extend(zones_under(root, &path, &alias, &root_spdx)?);
     }
 
     // Files that sit beside subdirectories (or are the whole tree) are not inside
@@ -493,22 +583,99 @@ pub fn detect_manifest_spdx(dir: &std::path::Path) -> String {
             }
         }
     }
+    let setup_cfg = dir.join("setup.cfg");
+    if setup_cfg.is_file() {
+        if let Ok(txt) = std::fs::read_to_string(&setup_cfg) {
+            for line in txt.lines() {
+                if let Some(value) = manifest_license_value(line) {
+                    let classified = spdx_from_license_field(&value);
+                    if classified != "UNKNOWN" {
+                        return classified;
+                    }
+                }
+            }
+        }
+    }
     "UNKNOWN".to_string()
 }
 
-// shortcut: a zone's license is the directory LICENSE/COPYING file or manifest
-// field, not per-file SPDX headers. Upgrade when one directory mixes licenses.
-fn detect_zone_spdx(root: &std::path::Path, dir: &std::path::Path) -> std::io::Result<String> {
-    let license_names = [
-        "LICENSE",
-        "LICENSE.md",
-        "LICENSE.txt",
-        "LICENSE-APACHE",
-        "LICENSE-MIT",
-        "COPYING",
-    ];
-    for lname in license_names {
-        let p = dir.join(lname);
+fn strip_license_ext(lower: &str) -> &str {
+    for ext in [".markdown", ".md", ".txt", ".rst"] {
+        if let Some(stripped) = lower.strip_suffix(ext) {
+            return stripped;
+        }
+    }
+    lower
+}
+
+fn is_license_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let base = strip_license_ext(&lower);
+    base == "license"
+        || base == "licence"
+        || base == "copying"
+        || base.starts_with("license-")
+        || base.starts_with("licence-")
+        || base.starts_with("copying-")
+        || base.starts_with("copying.")
+}
+
+fn license_rank(name: &str) -> (u8, String) {
+    let lower = name.to_ascii_lowercase();
+    let base = strip_license_ext(&lower);
+    let rank = if base == "license" || base == "licence" {
+        0
+    } else if base.starts_with("license") || base.starts_with("licence") {
+        1
+    } else if base == "copying" {
+        2
+    } else {
+        3
+    };
+    (rank, lower)
+}
+
+fn rel_posix(root: &std::path::Path, path: &std::path::Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rel) => rel
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "zone".to_string()),
+    }
+}
+
+/// Classified SPDX from a LICENSE/COPYING/LICENCE file in `dir`, if one exists.
+/// `Ok(None)` means no recognized license file. Permission errors propagate.
+fn classified_license_file(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+) -> std::io::Result<Option<String>> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("cannot read directory '{}': {}", dir.display(), e),
+            ));
+        }
+        Err(_) => return Ok(None),
+    };
+    let mut names = Vec::new();
+    for entry in rd {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_license_filename(&name) {
+            names.push(name);
+        }
+    }
+    names.sort_by_key(|name| license_rank(name));
+    for name in names {
+        let p = dir.join(&name);
         let Ok(meta) = std::fs::symlink_metadata(&p) else {
             continue;
         };
@@ -522,7 +689,7 @@ fn detect_zone_spdx(root: &std::path::Path, dir: &std::path::Path) -> std::io::R
             Ok(txt) => {
                 let classified = classify_license_text(&txt);
                 if classified != "UNKNOWN" {
-                    return Ok(classified);
+                    return Ok(Some(classified));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -533,6 +700,44 @@ fn detect_zone_spdx(root: &std::path::Path, dir: &std::path::Path) -> std::io::R
             }
             Err(_) => continue,
         }
+    }
+    Ok(None)
+}
+
+fn zones_under(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    alias: &str,
+    inherited: &str,
+) -> std::io::Result<Vec<IntakeZoneDecision>> {
+    let local = detect_zone_spdx(root, dir)?;
+    let zone_spdx = if local == "UNKNOWN" {
+        inherited.to_string()
+    } else {
+        local
+    };
+    let policy = policy_for_spdx(&zone_spdx);
+    let (code_count, fixture_count, vectors_count, nested) =
+        count_zone_files_and_permissive_vectors(root, dir, policy, &zone_spdx)?;
+    let mut decisions = vec![zone_decision(
+        alias.to_string(),
+        zone_spdx,
+        policy,
+        code_count,
+        fixture_count,
+        vectors_count,
+    )];
+    decisions.extend(nested);
+    Ok(decisions)
+}
+
+// shortcut: a zone's license is the directory LICENSE/COPYING/LICENCE file
+// (any case) or manifest field, not per-file SPDX headers. A nested license
+// file is its own zone. Upgrade when one directory mixes licenses without a
+// license file of its own.
+fn detect_zone_spdx(root: &std::path::Path, dir: &std::path::Path) -> std::io::Result<String> {
+    if let Some(spdx) = classified_license_file(root, dir)? {
+        return Ok(spdx);
     }
     Ok(detect_manifest_spdx(dir))
 }
@@ -587,10 +792,12 @@ fn count_zone_files_and_permissive_vectors(
     root: &std::path::Path,
     dir: &std::path::Path,
     policy: AccessPolicy,
-) -> std::io::Result<(usize, usize, usize)> {
+    zone_spdx: &str,
+) -> std::io::Result<(usize, usize, usize, Vec<IntakeZoneDecision>)> {
     let mut code = 0usize;
     let mut fixtures = 0usize;
     let mut vectors = 0usize;
+    let mut nested = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(cur) = stack.pop() {
         let rd = match std::fs::read_dir(&cur) {
@@ -615,7 +822,14 @@ fn count_zone_files_and_permissive_vectors(
                 continue;
             }
             if ft.is_dir() {
-                stack.push(p);
+                // A nested LICENSE/COPYING file is its own zone and overrides
+                // the parent verdict. Its files are not counted here.
+                if p != dir && classified_license_file(root, &p)?.is_some() {
+                    let alias = rel_posix(root, &p);
+                    nested.extend(zones_under(root, &p, &alias, zone_spdx)?);
+                } else {
+                    stack.push(p);
+                }
             } else if ft.is_file() {
                 match source_or_fixture_kind(&name) {
                     Some(FileKind::Code) => code += 1,
@@ -633,5 +847,5 @@ fn count_zone_files_and_permissive_vectors(
             }
         }
     }
-    Ok((code, fixtures, vectors))
+    Ok((code, fixtures, vectors, nested))
 }

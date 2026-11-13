@@ -402,10 +402,16 @@ fn e2_proposals_persist_for_cross_process_accept() {
         .map(|p| p.id.clone())
         .expect("PromoteStagedOrgan proposal");
 
-    let proposals_path = root.join(".carnot/proposals.json");
+    let state = carnot::workspace::point_state_dir(&root, false);
+    let proposals_path = state.join(".carnot/proposals.json");
     assert!(
         proposals_path.is_file(),
-        "StageOnly win must flush proposals to disk"
+        "StageOnly win must flush proposals to {}",
+        proposals_path.display()
+    );
+    assert!(
+        !root.join("carnot.manifest.json").exists(),
+        "pointing a bare tree must not write a manifest into it"
     );
 
     // Simulate a fresh CLI process: reload workspace and Accept by id.

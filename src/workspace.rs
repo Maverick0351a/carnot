@@ -29,6 +29,43 @@ pub struct WorkspaceLayout {
     pub proposals_json: PathBuf,
 }
 
+/// True when `dir` is already a Carnot workspace (init, generate, or `point --in-tree`).
+/// A trial's `.carnot/ledger.jsonl` or `.carnot/staged` does not count: those are
+/// written into the code tree by the worktree runner.
+pub fn workspace_has_in_tree_state(dir: &Path) -> bool {
+    dir.join("carnot.manifest.json").is_file() || dir.join("Carnot.toml").is_file()
+}
+
+fn xdg_data_home() -> PathBuf {
+    if let Ok(value) = std::env::var("XDG_DATA_HOME") {
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".local").join("share");
+    }
+    std::env::temp_dir().join("carnot-xdg")
+}
+
+/// External state directory for a pointed tree that is not already a Carnot workspace.
+pub fn external_point_state_dir(target: &Path) -> PathBuf {
+    let canon = fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let key = crate::evidence::sha256_hex(canon.to_string_lossy().as_bytes());
+    let short = key.get(..16).unwrap_or(&key);
+    xdg_data_home().join("carnot").join("points").join(short)
+}
+
+/// Where `point` stores `carnot.manifest.json` and `.carnot/`.
+/// Existing workspaces stay in-tree. `force_in_tree` opts a bare tree into that layout.
+pub fn point_state_dir(target: &Path, force_in_tree: bool) -> PathBuf {
+    if force_in_tree || workspace_has_in_tree_state(target) {
+        target.to_path_buf()
+    } else {
+        external_point_state_dir(target)
+    }
+}
+
 impl WorkspaceLayout {
     pub fn at(root: &Path) -> Self {
         let state_dir = root.join(".carnot");

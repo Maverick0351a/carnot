@@ -21,6 +21,25 @@ pub enum TargetLanguage {
 }
 
 impl TargetLanguage {
+    pub const SUPPORTED: &'static str = "rust, go, typescript, python, scala3, zig, auto";
+
+    /// Accepts the same aliases as `from_str_loose`, and rejects unknown names.
+    pub fn parse_known(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "rust" | "rs" => Ok(Self::Rust),
+            "go" | "golang" => Ok(Self::Go),
+            "ts" | "typescript" | "bun" | "node" => Ok(Self::TypeScript),
+            "py" | "python" => Ok(Self::Python),
+            "scala" | "scala3" => Ok(Self::Scala3),
+            "zig" => Ok(Self::Zig),
+            "auto" | "shootout" | "auto_shootout" => Ok(Self::AutoShootout),
+            other => Err(format!(
+                "unknown language '{other}'; supported: {}",
+                Self::SUPPORTED
+            )),
+        }
+    }
+
     pub fn from_str_loose(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "go" | "golang" => Self::Go,
@@ -95,6 +114,13 @@ pub struct CandidateSourceMetrics {
     pub transitive_deps_estimate: usize,
     pub detected_license: String,
     pub has_mixed_license_subdirs: bool,
+}
+
+/// CLI/library scout result. `demo` is true only for the seeded candidate set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoutCommandReport {
+    pub demo: bool,
+    pub ranked: Vec<RankedScoutCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,4 +460,57 @@ pub fn inspect_local_directory_metrics(
         detected_license,
         has_mixed_license_subdirs: has_mixed,
     })
+}
+
+/// Relative paths of source files under `root`, capped, for workspace scoring.
+pub fn list_code_rel_paths(root: &Path, limit: usize) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, limit: usize, out: &mut Vec<String>, depth: usize) {
+        if out.len() >= limit || depth > 8 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if out.len() >= limit {
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, limit, out, depth + 1);
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !matches!(
+                ext.as_str(),
+                "rs" | "go" | "py" | "ts" | "tsx" | "js" | "scala" | "zig" | "c" | "cpp"
+            ) {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let text = rel
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join("/");
+            if !text.is_empty() {
+                out.push(text);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, limit, &mut out, 0);
+    out
 }

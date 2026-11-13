@@ -2,7 +2,8 @@
 //!
 //! Executes candidate organ mutations safely on disk without polluting the primary working tree:
 //! 1. Measures baseline objective in `repo_dir` via `evaluate_json_command_in_dir`.
-//! 2. Creates a temporary detached git worktree at `<repo_dir>/.carnot/worktrees/trial-<id>` and,
+//! 2. Creates a temporary detached git worktree at `<state_dir>/.carnot/worktrees/trial-<id>`
+//!    (`state_dir` defaults to `repo_dir`; `point` on a foreign tree passes its out-of-tree state dir) and,
 //!    when `black_box_enforced == true`, physically purges `.carnot/quarantine` and restricted
 //!    directories from the worktree before any coding agent runs inside it.
 //! 3. Supports BOTH stdout-emitting headless agents AND disk-editing coding agents (`claude`, `codex`,
@@ -52,6 +53,9 @@ pub struct WorktreeTrialRequest<'a> {
     pub bench_program: &'a str,
     pub bench_args: &'a [&'a str],
     pub timeout_ms: u64,
+    /// Where `.carnot/worktrees` and `.carnot/staged` are written.
+    /// `None` keeps them under `repo_dir` (existing workspace or `--in-tree`).
+    pub state_dir: Option<&'a Path>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,7 +163,8 @@ pub fn run_git_worktree_trial_secured(
 
     let seq = TRIAL_SEQ.fetch_add(1, Ordering::Relaxed);
     let trial_id = format!("trial-{}-{}", std::process::id(), seq);
-    let wt_parent = req.repo_dir.join(".carnot").join("worktrees");
+    let state_root = req.state_dir.unwrap_or(req.repo_dir);
+    let wt_parent = state_root.join(".carnot").join("worktrees");
     fs::create_dir_all(&wt_parent).map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
     let wt_dir = wt_parent.join(&trial_id);
     let wt_str = wt_dir.to_string_lossy().into_owned();
@@ -432,7 +437,7 @@ pub fn run_git_worktree_trial_secured(
                     .map_err(|e| format!("Failed to ratchet primary organ file: {}", e))?;
                 ratcheted_baseline = true;
 
-                let layout = WorkspaceLayout::at(req.repo_dir);
+                let layout = WorkspaceLayout::at(state_root);
                 let mut ledger = EvidenceLedger::new();
                 let rec = ledger.record(
                     EvidenceKind::Derived,
@@ -467,7 +472,7 @@ pub fn run_git_worktree_trial_secured(
             PromoteMode::StageOnly => {
                 let staged_rel = format!(".carnot/staged/{}", trial_id);
                 let staged_organ = resolve_contained_path(
-                    req.repo_dir,
+                    state_root,
                     &format!("{staged_rel}/{}", req.organ_rel_path),
                 )?;
                 if let Some(parent) = staged_organ.parent() {
@@ -477,7 +482,7 @@ pub fn run_git_worktree_trial_secured(
                 fs::write(&staged_organ, &spliced)
                     .map_err(|e| format!("Failed to write staged organ: {}", e))?;
                 let meta_path =
-                    resolve_contained_path(req.repo_dir, &format!("{staged_rel}/meta.json"))?;
+                    resolve_contained_path(state_root, &format!("{staged_rel}/meta.json"))?;
                 let meta = json!({
                     "trial_id": trial_id,
                     "organ_id": req.organ.id,
@@ -490,7 +495,7 @@ pub fn run_git_worktree_trial_secured(
                     .map_err(|e| format!("Failed to write staged meta: {}", e))?;
                 staged_rel_dir = Some(staged_rel.clone());
 
-                let layout = WorkspaceLayout::at(req.repo_dir);
+                let layout = WorkspaceLayout::at(state_root);
                 let mut ledger = EvidenceLedger::new();
                 let rec = ledger.record(
                     EvidenceKind::Derived,

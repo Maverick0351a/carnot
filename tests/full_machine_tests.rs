@@ -639,6 +639,7 @@ fn real_disk_spdx_scan_project_generation_and_git_worktree_trial() {
         bench_program: "python",
         bench_args: &["solve_bench.py"],
         timeout_ms: 8_000,
+        state_dir: None,
     })
     .unwrap();
     assert!(!bad_trial.tests_passed);
@@ -663,6 +664,7 @@ fn real_disk_spdx_scan_project_generation_and_git_worktree_trial() {
         bench_program: "python",
         bench_args: &["solve_bench.py"],
         timeout_ms: 8_000,
+        state_dir: None,
     })
     .unwrap();
 

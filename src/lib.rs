@@ -22,6 +22,8 @@ pub mod recipe;
 pub mod rollout;
 pub mod scout;
 pub mod server;
+pub mod spec;
+pub mod testrun;
 pub mod tier;
 pub mod workspace;
 pub mod worktree;

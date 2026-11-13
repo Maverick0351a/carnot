@@ -30,8 +30,8 @@ pub struct WorkspaceLayout {
 }
 
 /// True when `dir` is already a Carnot workspace (init, generate, or `point --in-tree`).
-/// A trial's `.carnot/ledger.jsonl` or `.carnot/staged` does not count: those are
-/// written into the code tree by the worktree runner.
+/// A trial's ledger and `.carnot/staged` live under the point state dir, which is
+/// this tree only when the workspace is already in-tree.
 pub fn workspace_has_in_tree_state(dir: &Path) -> bool {
     dir.join("carnot.manifest.json").is_file() || dir.join("Carnot.toml").is_file()
 }

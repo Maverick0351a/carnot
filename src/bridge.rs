@@ -187,8 +187,8 @@ pub struct CarnotMachine {
 }
 
 /// CLI/library verify result. `demo` is true only for the seeded golden set.
-/// `checks_executed` is true only when an evaluator ran. A pointed tree is an
-/// inventory (`source_files` plus a signal score), not a test pass.
+/// `checks_executed` is true only when a test runner actually started.
+/// With no runner, the tree is an inventory (`source_files` plus a signal score).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyCommandReport {
     pub demo: bool,
@@ -197,6 +197,20 @@ pub struct VerifyCommandReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_files: Vec<String>,
     pub summaries: Vec<VariantEvalSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub timed_out: bool,
 }
 
 impl CarnotMachine {
@@ -1749,9 +1763,14 @@ impl CarnotMachine {
         })
     }
 
-    /// Inventory the source files in `dir` and score that inventory.
-    /// Does not run the tree's tests and does not mark files as passing.
-    pub fn verify_pointed(&mut self, dir: &Path) -> Result<VerifyCommandReport, String> {
+    /// Inventory `dir` and, when a test runner is detected, run it.
+    /// `checks_executed` is true only if that runner's process started.
+    /// `timeout_ms` bounds the runner. Carnot itself does not write into `dir`.
+    pub fn verify_pointed(
+        &mut self,
+        dir: &Path,
+        timeout_ms: u64,
+    ) -> Result<VerifyCommandReport, String> {
         if !dir.is_dir() {
             return Err(format!(
                 "verify target is not a directory: {}",
@@ -1770,18 +1789,58 @@ impl CarnotMachine {
             .map(|row| row.total_carnot_efficiency / 100.0)
             .unwrap_or(0.0);
         let source_files = list_code_rel_paths(dir, 48);
+        let execution = crate::testrun::detect_test_runner(dir)
+            .map(|runner| crate::testrun::run_test_runner(dir, &runner, timeout_ms));
+        let (variant_name, model, cases, pass_rate, failures, latency, note, checks_executed) =
+            if let Some(ref run) = execution {
+                let pass_rate = crate::testrun::schema_pass_rate(run.passed, run.failed);
+                let cases = match (run.passed, run.failed) {
+                    (Some(passed), Some(failed)) if passed + failed > 0 => {
+                        (passed + failed) as usize
+                    }
+                    _ => 0,
+                };
+                let note = if pass_rate.is_none() {
+                    run.note.clone().or_else(|| {
+                        Some("pass rate omitted; pass/fail counts were missing".to_string())
+                    })
+                } else {
+                    run.note.clone()
+                };
+                (
+                    "project test run".to_string(),
+                    run.command.clone(),
+                    cases,
+                    pass_rate,
+                    run.failed.unwrap_or(0) as usize,
+                    run.duration_ms,
+                    note,
+                    run.started,
+                )
+            } else {
+                (
+                    "pointed workspace inventory".to_string(),
+                    "inventory".to_string(),
+                    source_files.len(),
+                    None,
+                    0,
+                    0,
+                    Some("no test runner detected".to_string()),
+                    false,
+                )
+            };
         let summary = VariantEvalSummary {
             variant_id: alias,
-            variant_name: "pointed workspace inventory".to_string(),
-            model: "inventory".to_string(),
+            variant_name,
+            model,
             split: DatasetSplit::Golden,
-            cases_evaluated: source_files.len(),
-            schema_pass_rate: 0.0,
+            cases_evaluated: cases,
+            schema_pass_rate: pass_rate,
             tool_call_pass_rate: 0.0,
             mean_g_eval: 0.0,
             composite_score: composite,
-            critical_failures: 0,
-            p95_latency_ms: 0,
+            critical_failures: failures,
+            p95_latency_ms: latency,
             cost_per_1k_usd: 0.0,
             pareto_optimal: false,
             case_scores: Vec::new(),
@@ -1789,10 +1848,17 @@ impl CarnotMachine {
         self.latest_evals = vec![summary.clone()];
         Ok(VerifyCommandReport {
             demo: false,
-            checks_executed: false,
+            checks_executed,
             workspace: Some(dir.display().to_string()),
             source_files,
             summaries: vec![summary],
+            test_command: execution.as_ref().map(|run| run.command.clone()),
+            exit_code: execution.as_ref().and_then(|run| run.exit_code),
+            passed: execution.as_ref().and_then(|run| run.passed),
+            failed: execution.as_ref().and_then(|run| run.failed),
+            duration_ms: execution.as_ref().map(|run| run.duration_ms),
+            note,
+            timed_out: execution.as_ref().map(|run| run.timed_out).unwrap_or(false),
         })
     }
 
@@ -2198,6 +2264,7 @@ impl CarnotMachine {
             Self::live_eval_commands(&root);
         let test_arg_refs: Vec<&str> = test_args_owned.iter().map(|s| s.as_str()).collect();
         let bench_arg_refs: Vec<&str> = bench_args_owned.iter().map(|s| s.as_str()).collect();
+        let state = self.state_root.clone().unwrap_or_else(|| root.clone());
 
         let security = WorktreeSecurityOptions {
             promote_mode,
@@ -2218,6 +2285,7 @@ impl CarnotMachine {
                 bench_program: &bench_prog,
                 bench_args: &bench_arg_refs,
                 timeout_ms: 30_000,
+                state_dir: Some(&state),
             },
             &security,
         )?;
@@ -2227,11 +2295,11 @@ impl CarnotMachine {
         let mut experience_cards = Vec::new();
         if promote_mode == PromoteMode::StageOnly {
             if let Some(ref staged_rel_raw) = trial.staged_rel_dir {
-                let staged_rel = sanitize_workspace_rel_path(&root, staged_rel_raw)?;
+                let staged_rel = sanitize_workspace_rel_path(&state, staged_rel_raw)?;
                 let prop_id = format!("prop-{:03}", self.shell.proposals.len() + 1);
                 let agent = self.shell.active_agent_id.clone();
                 let before = std::fs::read_to_string(&organ_abs).unwrap_or_default();
-                let staged_path = root.join(&staged_rel).join(&organ_rel);
+                let staged_path = state.join(&staged_rel).join(&organ_rel);
                 let after = std::fs::read_to_string(&staged_path).unwrap_or_default();
                 let diff_lines = crate::proposals::compute_lcs_line_diff(&before, &after);
                 self.shell.proposals.insert(
@@ -2365,12 +2433,13 @@ impl CarnotMachine {
             .workspace_root
             .clone()
             .ok_or_else(|| "promote_staged_trial requires workspace_root".to_string())?;
+        let state = self.state_root.clone().unwrap_or_else(|| root.clone());
         let staged_rel_raw = staged_rel_dir
             .map(|s| s.to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!(".carnot/staged/{}", trial_id));
-        let staged_rel = sanitize_workspace_rel_path(&root, &staged_rel_raw)?;
-        let staged_root = resolve_contained_path(&root, &staged_rel)?;
+        let staged_rel = sanitize_workspace_rel_path(&state, &staged_rel_raw)?;
+        let staged_root = resolve_contained_path(&state, &staged_rel)?;
         if !staged_root.is_dir() {
             return Err(format!(
                 "Staged trial dir missing: {}",
@@ -2389,7 +2458,7 @@ impl CarnotMachine {
         let organ_rel_path = sanitize_workspace_rel_path(&root, organ_rel_raw)?;
         let primary = resolve_contained_path(&root, &organ_rel_path)?;
         let staged_file = resolve_contained_path(
-            &root,
+            &state,
             &format!("{}/{}", staged_rel.trim_end_matches('/'), organ_rel_path),
         )?;
         let organ_id = meta
@@ -2844,8 +2913,8 @@ impl CarnotMachine {
                     ..
                 } = &action
                 {
-                    if let Some(ref root) = self.workspace_root {
-                        match resolve_contained_path(root, staged_rel_dir) {
+                    if let Some(root) = self.durable_root().map(|path| path.to_path_buf()) {
+                        match resolve_contained_path(&root, staged_rel_dir) {
                             Ok(staged) => {
                                 let _ = std::fs::remove_dir_all(&staged);
                                 self.log_event(

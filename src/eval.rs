@@ -162,7 +162,9 @@ pub struct VariantEvalSummary {
     pub model: String,
     pub split: DatasetSplit,
     pub cases_evaluated: usize,
-    pub schema_pass_rate: f64,
+    /// `None` when no cases were scored. Serialized as JSON null.
+    #[serde(default)]
+    pub schema_pass_rate: Option<f64>,
     pub tool_call_pass_rate: f64,
     pub mean_g_eval: f64,
     pub composite_score: f64,
@@ -1482,7 +1484,7 @@ pub fn evaluate_variants_cached(
             model: v.model.clone(),
             split: target_split,
             cases_evaluated: active_cases.len(),
-            schema_pass_rate: ((schema_passes as f64 / n) * 1000.0).round() / 1000.0,
+            schema_pass_rate: Some(((schema_passes as f64 / n) * 1000.0).round() / 1000.0),
             tool_call_pass_rate: ((tool_passes as f64 / n) * 1000.0).round() / 1000.0,
             mean_g_eval: mean_g,
             composite_score: ((composite_sum / n) * 1000.0).round() / 1000.0,

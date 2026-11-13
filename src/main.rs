@@ -38,6 +38,10 @@ fn launch_desktop_app_window(url: &str) {
     }
 }
 
+fn verify_process_failed(timed_out: bool, exit_code: Option<i32>, failed: u64) -> bool {
+    timed_out || failed > 0 || exit_code.is_some_and(|code| code != 0)
+}
+
 fn print_json(value: &impl serde::Serialize) {
     match serde_json::to_string_pretty(value) {
         Ok(text) => println!("{text}"),
@@ -58,6 +62,8 @@ Usage:
   carnot init <dir> [name] [lang]
   carnot intake-scan <dir>
   carnot generate <dir> [lang]
+  carnot spec <dir> [--out <file>] [--holdout <fraction>]
+  carnot generate <dir> --spec <file>
   carnot proxy <listen> <control> <canary> [pct] [ws]
   carnot app [host:port] [ws]
   carnot serve [host:port] [ws]
@@ -68,7 +74,7 @@ Usage:
   carnot daemon [--once | --ticks N] [ws]
   carnot evolve [organ] [gens] [--demo] [--apply] [--candidate <file>]
   carnot proposal <accept|decline|undo> <proposal_id> [ws]
-  carnot verify [--demo] [dir]
+  carnot verify [--demo] [--timeout <seconds>] [--against <spec>] [--all] [dir]
   carnot mcp [ws]
   carnot black-box <on|off|status> [ws]
   carnot search <query> [dir] [top_k]
@@ -78,9 +84,10 @@ Usage:
   carnot obligations [ws]
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
-`carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names.
-`carnot scout` scores the directory you pass (or `.`). `carnot verify` inventories that tree and does not mark files as passing. `--demo` is the seeded set and is labeled in the output.
-`carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`.
+`carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names. `carnot generate <dir> --spec <file>` rebuilds a Python library from a spec file and does not read the original tree.
+`carnot spec` writes a Python public-API spec (signatures, docstrings, literal examples, no function bodies). `--holdout` defaults to 0.3 and withholds that fraction of examples from generation. Other languages are not supported.
+`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs the project's own test command in that directory, so it executes the tree's code. It runs cargo, pytest or unittest, npm, or `go test -json` when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `carnot verify <dir> --against <spec>` grades held-out examples (`--all` grades every example). The process exits 1 when the run times out, the runner exits non-zero, or any graded example fails. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
+`carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`. Live evolve writes `.carnot/worktrees` and `.carnot/staged` in that same state directory.
 Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
 ",
@@ -196,10 +203,115 @@ fn main() {
                 }
             }
         }
+        "spec" => {
+            let mut out_path: Option<String> = None;
+            let mut holdout = carnot::spec::DEFAULT_HOLDOUT;
+            let mut dir: Option<&str> = None;
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--out" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot spec <dir> --out <file>");
+                            std::process::exit(2);
+                        };
+                        out_path = Some(path.clone());
+                    }
+                    "--holdout" => {
+                        i += 1;
+                        let Some(raw) = args.get(i).and_then(|s| s.parse::<f64>().ok()) else {
+                            eprintln!("Usage: carnot spec <dir> [--holdout <fraction>]");
+                            std::process::exit(2);
+                        };
+                        if !(0.0..=1.0).contains(&raw) {
+                            eprintln!("--holdout must be between 0 and 1");
+                            std::process::exit(2);
+                        }
+                        holdout = raw;
+                    }
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown spec flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => dir = Some(other),
+                }
+                i += 1;
+            }
+            let Some(dir) = dir else {
+                eprintln!("Usage: carnot spec <dir> [--out <file>]");
+                std::process::exit(2);
+            };
+            let target = Path::new(dir);
+            let default_name = target
+                .file_name()
+                .map(|name| format!("{}.carnot-spec.json", name.to_string_lossy()))
+                .unwrap_or_else(|| "library.carnot-spec.json".to_string());
+            let out_file = out_path
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(default_name));
+            match carnot::spec::write_spec(target, &out_file, holdout) {
+                Ok(spec) => {
+                    eprintln!(
+                        "wrote Python spec ({} modules) to {}",
+                        spec.modules.len(),
+                        out_file.display()
+                    );
+                    print_json(&spec);
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         "generate" => {
-            let dir_str = args.get(2).map(|s| s.as_str()).unwrap_or("./generated-app");
+            let mut spec_path: Option<String> = None;
+            let mut positionals: Vec<&str> = Vec::new();
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--spec" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot generate <dir> --spec <file>");
+                            std::process::exit(2);
+                        };
+                        spec_path = Some(path.clone());
+                    }
+                    other if other.starts_with('-') => {
+                        eprintln!("Unknown generate flag '{other}'");
+                        std::process::exit(2);
+                    }
+                    other => positionals.push(other),
+                }
+                i += 1;
+            }
+            let dir_str = positionals.first().copied().unwrap_or("./generated-app");
             let target_dir = Path::new(dir_str);
-            let lang = if let Some(raw) = args.get(3) {
+            if let Some(spec_file) = spec_path {
+                if let Some(lang) = positionals.get(1) {
+                    if !lang.eq_ignore_ascii_case("python") {
+                        eprintln!("generate --spec supports Python libraries only");
+                        std::process::exit(2);
+                    }
+                }
+                match carnot::spec::generate_from_spec(Path::new(&spec_file), target_dir) {
+                    Ok(certificate) => {
+                        eprintln!(
+                            "rebuilt Python package from spec {} (spec-only, sha256 {})",
+                            spec_file, certificate.spec_sha256
+                        );
+                        print_json(&certificate);
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            let lang = if let Some(raw) = positionals.get(1) {
                 match TargetLanguage::parse_known(raw) {
                     Ok(lang) => Some(lang),
                     Err(e) => {
@@ -347,18 +459,75 @@ fn main() {
         }
         "verify" => {
             let mut demo = false;
+            let mut timeout_secs = carnot::testrun::DEFAULT_VERIFY_TIMEOUT_SECS;
+            let mut against: Option<String> = None;
+            let mut grade_all = false;
             let mut dir: Option<&str> = None;
-            for arg in args.iter().skip(2) {
-                match arg.as_str() {
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
                     "--demo" => demo = true,
+                    "--against" => {
+                        i += 1;
+                        let Some(path) = args.get(i) else {
+                            eprintln!("Usage: carnot verify <dir> --against <spec>");
+                            std::process::exit(2);
+                        };
+                        against = Some(path.clone());
+                    }
+                    "--all" => grade_all = true,
+                    "--timeout" => {
+                        i += 1;
+                        let Some(secs) = args.get(i).and_then(|s| s.parse::<u64>().ok()) else {
+                            eprintln!("Usage: carnot verify [--timeout <seconds>] [dir]");
+                            std::process::exit(2);
+                        };
+                        if secs == 0 {
+                            eprintln!("--timeout must be at least 1 second");
+                            std::process::exit(2);
+                        }
+                        timeout_secs = secs;
+                    }
                     other if other.starts_with('-') => {
                         eprintln!("Unknown verify flag '{other}'");
                         std::process::exit(2);
                     }
                     other => dir = Some(other),
                 }
+                i += 1;
             }
-            if demo {
+            if demo && against.is_some() {
+                eprintln!("verify --demo and --against cannot be combined");
+                std::process::exit(2);
+            }
+            if let Some(spec_file) = against {
+                let dir = dir.unwrap_or(".");
+                match carnot::spec::verify_against(
+                    Path::new(dir),
+                    Path::new(&spec_file),
+                    timeout_secs.saturating_mul(1000),
+                    grade_all,
+                ) {
+                    Ok(report) => {
+                        eprintln!(
+                            "spec examples: {} passed, {} failed (held-out {} passed, {} failed)",
+                            report.passed,
+                            report.failed,
+                            report.held_out_passed,
+                            report.held_out_failed
+                        );
+                        print_json(&report);
+                        if verify_process_failed(report.timed_out, report.exit_code, report.failed)
+                        {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if demo {
                 let mut machine = CarnotMachine::new_seeded();
                 let summaries = machine.run_evaluations(DatasetSplit::Golden);
                 eprintln!("offline demo (seeded golden set); not a score of the pointed workspace");
@@ -368,13 +537,52 @@ fn main() {
                     workspace: None,
                     source_files: Vec::new(),
                     summaries,
+                    test_command: None,
+                    exit_code: None,
+                    passed: None,
+                    failed: None,
+                    duration_ms: None,
+                    note: None,
+                    timed_out: false,
                 });
             } else {
-                eprintln!("inventory of the pointed tree; tests were not run");
                 let dir = dir.unwrap_or(".");
                 let mut machine = CarnotMachine::new_seeded();
-                match machine.verify_pointed(Path::new(dir)) {
-                    Ok(report) => print_json(&report),
+                match machine.verify_pointed(Path::new(dir), timeout_secs.saturating_mul(1000)) {
+                    Ok(report) => {
+                        if report.checks_executed {
+                            eprintln!(
+                                "ran {} (exit {})",
+                                report.test_command.as_deref().unwrap_or("tests"),
+                                report
+                                    .exit_code
+                                    .map(|code| code.to_string())
+                                    .unwrap_or_else(|| {
+                                        if report.timed_out {
+                                            "timeout".to_string()
+                                        } else {
+                                            "none".to_string()
+                                        }
+                                    })
+                            );
+                        } else {
+                            eprintln!(
+                                "{}",
+                                report
+                                    .note
+                                    .as_deref()
+                                    .unwrap_or("no test runner detected; inventory only")
+                            );
+                        }
+                        print_json(&report);
+                        if verify_process_failed(
+                            report.timed_out,
+                            report.exit_code,
+                            report.failed.unwrap_or(0),
+                        ) {
+                            std::process::exit(1);
+                        }
+                    }
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(1);

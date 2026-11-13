@@ -157,6 +157,7 @@ fn missing_scan_path_and_non_git_evolve_fail_with_a_reason() {
         bench_program: "python3",
         bench_args: &["-c", ""],
         timeout_ms: 1_000,
+        state_dir: None,
     })
     .unwrap_err();
     assert!(

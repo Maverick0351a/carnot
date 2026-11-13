@@ -12,7 +12,7 @@ use carnot::mcp::handle_jsonrpc_with_budget;
 use carnot::proposals::ProposalAction;
 use carnot::recipe::OrganSpec;
 use carnot::tier::AccountTier;
-use carnot::workspace::sanitize_workspace_rel_path;
+use carnot::workspace::{point_state_dir, sanitize_workspace_rel_path};
 use carnot::worktree::{
     run_git_worktree_trial_secured, CandidateSource, WorktreeSecurityOptions, WorktreeTrialRequest,
 };
@@ -150,6 +150,7 @@ fn trial_request<'a>(
         bench_program: "python",
         bench_args: &["solve_bench.py"],
         timeout_ms: 30_000,
+        state_dir: None,
     }
 }
 
@@ -329,8 +330,11 @@ fn e2_machine_accept_promotes_staged_organ() {
             staged_rel_dir,
             organ_rel_path,
             ..
-        } => fs::read_to_string(root.join(staged_rel_dir).join(organ_rel_path))
-            .expect("read staged organ"),
+        } => {
+            let state = point_state_dir(&root, false);
+            fs::read_to_string(state.join(staged_rel_dir).join(organ_rel_path))
+                .expect("read staged organ from the point state dir")
+        }
         _ => unreachable!(),
     };
 

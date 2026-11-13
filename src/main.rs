@@ -68,7 +68,7 @@ Usage:
   carnot daemon [--once | --ticks N] [ws]
   carnot evolve [organ] [gens] [--demo] [--apply] [--candidate <file>]
   carnot proposal <accept|decline|undo> <proposal_id> [ws]
-  carnot verify [--demo] [dir]
+  carnot verify [--demo] [--timeout <seconds>] [dir]
   carnot mcp [ws]
   carnot black-box <on|off|status> [ws]
   carnot search <query> [dir] [top_k]
@@ -79,8 +79,8 @@ Usage:
 
 `carnot demo` is an offline walkthrough. It does not modify a workspace and is not a live agent result.
 `carnot generate` writes into a directory created by `carnot init`. An unknown language exits 2 and lists the supported names.
-`carnot scout` scores the directory you pass (or `.`). `carnot verify` inventories that tree and does not mark files as passing. `--demo` is the seeded set and is labeled in the output.
-`carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`.
+`carnot scout` scores the directory you pass (or `.`). `carnot verify` runs cargo, pytest or unittest, npm, or go tests when that runner is present, and sets checks_executed only after the runner starts. With no runner it inventories the tree and says so. `--timeout` defaults to 120 seconds. `--demo` is the seeded set and is labeled in the output.
+`carnot point` stores state outside the target unless it is already a Carnot workspace or you pass `--in-tree`. Live evolve writes `.carnot/worktrees` and `.carnot/staged` in that same state directory.
 Live evolve reads `--candidate <file>` as the EVOLVE block body. `carnot daemon` still reports a skip until a candidate is supplied.
 Account tier defaults to Pro. `CARNOT_TIER=community` locks Pro-gated commands. This is an operator switch, not a license check.
 ",
@@ -347,16 +347,31 @@ fn main() {
         }
         "verify" => {
             let mut demo = false;
+            let mut timeout_secs = carnot::testrun::DEFAULT_VERIFY_TIMEOUT_SECS;
             let mut dir: Option<&str> = None;
-            for arg in args.iter().skip(2) {
-                match arg.as_str() {
+            let mut i = 2usize;
+            while i < args.len() {
+                match args[i].as_str() {
                     "--demo" => demo = true,
+                    "--timeout" => {
+                        i += 1;
+                        let Some(secs) = args.get(i).and_then(|s| s.parse::<u64>().ok()) else {
+                            eprintln!("Usage: carnot verify [--timeout <seconds>] [dir]");
+                            std::process::exit(2);
+                        };
+                        if secs == 0 {
+                            eprintln!("--timeout must be at least 1 second");
+                            std::process::exit(2);
+                        }
+                        timeout_secs = secs;
+                    }
                     other if other.starts_with('-') => {
                         eprintln!("Unknown verify flag '{other}'");
                         std::process::exit(2);
                     }
                     other => dir = Some(other),
                 }
+                i += 1;
             }
             if demo {
                 let mut machine = CarnotMachine::new_seeded();
@@ -368,13 +383,45 @@ fn main() {
                     workspace: None,
                     source_files: Vec::new(),
                     summaries,
+                    test_command: None,
+                    exit_code: None,
+                    passed: None,
+                    failed: None,
+                    duration_ms: None,
+                    note: None,
+                    timed_out: false,
                 });
             } else {
-                eprintln!("inventory of the pointed tree; tests were not run");
                 let dir = dir.unwrap_or(".");
                 let mut machine = CarnotMachine::new_seeded();
-                match machine.verify_pointed(Path::new(dir)) {
-                    Ok(report) => print_json(&report),
+                match machine.verify_pointed(Path::new(dir), timeout_secs.saturating_mul(1000)) {
+                    Ok(report) => {
+                        if report.checks_executed {
+                            eprintln!(
+                                "ran {} (exit {})",
+                                report.test_command.as_deref().unwrap_or("tests"),
+                                report
+                                    .exit_code
+                                    .map(|code| code.to_string())
+                                    .unwrap_or_else(|| {
+                                        if report.timed_out {
+                                            "timeout".to_string()
+                                        } else {
+                                            "none".to_string()
+                                        }
+                                    })
+                            );
+                        } else {
+                            eprintln!(
+                                "{}",
+                                report
+                                    .note
+                                    .as_deref()
+                                    .unwrap_or("no test runner detected; inventory only")
+                            );
+                        }
+                        print_json(&report);
+                    }
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(1);

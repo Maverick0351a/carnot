@@ -273,7 +273,11 @@ fn scout_and_verify_score_the_tree_unless_demo() {
         "{verify_text}"
     );
     let verify_err = String::from_utf8_lossy(&verify.stderr);
-    assert!(verify_err.contains("tests were not run"), "{verify_err}");
+    assert!(
+        verify_err.contains("no test runner detected"),
+        "{verify_err}"
+    );
+    assert_eq!(verify_json["note"], "no test runner detected");
     assert!(!verify_text.contains("gold-001"), "{verify_text}");
     assert!(!verify_text.contains("v1-legacy-baseline"), "{verify_text}");
 

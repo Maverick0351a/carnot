@@ -219,15 +219,33 @@ fn symlink_outside_the_tree_and_unreadable_license_fail_cleanly() {
     let mut perms = fs::metadata(&license).unwrap().permissions();
     perms.set_mode(0o0);
     fs::set_permissions(&license, perms).unwrap();
-    let denied = scan_directory_spdx_zones(&locked).unwrap_err();
-    let denied_msg = denied.to_string();
-    assert!(
-        denied.kind() == std::io::ErrorKind::PermissionDenied || denied_msg.contains("license"),
-        "{denied_msg}"
-    );
+    // Root ignores mode 000, so the scan cannot fail. Only assert when the
+    // kernel actually refuses the read.
+    match fs::read(&license) {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            let denied = scan_directory_spdx_zones(&locked).unwrap_err();
+            let denied_msg = denied.to_string();
+            assert!(
+                denied.kind() == std::io::ErrorKind::PermissionDenied
+                    || denied_msg.contains("license"),
+                "{denied_msg}"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => panic!("unexpected read of mode 000 license: {e}"),
+    }
     let mut restore = fs::metadata(&license).unwrap().permissions();
     restore.set_mode(0o644);
     fs::set_permissions(&license, restore).unwrap();
+}
+
+#[test]
+fn long_license_without_terms_marker_does_not_slice_mid_character() {
+    let mut text = "x".repeat(3999);
+    text.push('你');
+    assert!(text.len() > 4000);
+    assert!(!text.is_char_boundary(4000));
+    let _ = classify_license_text(&text);
 }
 
 #[test]

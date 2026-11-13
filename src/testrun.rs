@@ -182,6 +182,7 @@ pub fn run_test_runner(dir: &Path, runner: &TestRunner, timeout_ms: u64) -> Test
     }
     // shortcut: a fresh temp target dir, removed on every return. Upgrade if verify should reuse a warm cargo cache.
     static CARGO_SEQ: AtomicU64 = AtomicU64::new(1);
+    // Keep this bound until return. `let _ =` would drop the guard before the child runs.
     let _cargo_target = if runner.kind == RunnerKind::Cargo {
         let path = std::env::temp_dir().join(format!(
             "carnot-cargo-{}-{}",
